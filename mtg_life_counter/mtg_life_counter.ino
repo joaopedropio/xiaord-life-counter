@@ -1379,6 +1379,10 @@ volatile uint8_t cmdBuf[20];
 volatile uint8_t cmdLen = 0;
 
 enum { UP_IDLE, UP_RECV } upState = UP_IDLE;
+// connection interval in 1.25 ms units: 15 ms while a theme is coming in (the shortest
+// iOS accepts, and it must be asked as min = max), 30 ms otherwise to save battery
+const uint16_t CONN_FAST = 12, CONN_IDLE = 24;
+unsigned long upStartMs = 0;
 int      upSlot = 0;
 uint32_t upSize = 0, upWritten = 0, upFill = 0;
 uint8_t  upPage[PAGE_SIZE] __attribute__((aligned(4)));
@@ -1470,13 +1474,15 @@ void bleCommand(const uint8_t *c, int n) {
       }
       ctValid[slot] = false;
       upState = UP_IDLE;
-      unsigned long t0 = millis();
-      for (uint32_t a = 0; a < (size + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE; a += PAGE_SIZE)
-        flashErasePage(CT_BASE + slot * CT_SLOT_BYTES + a);
-      DBG("ble begin slot %d size %lu, erase %lu ms, mtu %d", slot, size, millis() - t0, Bluefruit.Connection(bleConn) ? Bluefruit.Connection(bleConn)->getMtu() : -1);
+      // pages are erased one by one as their data arrives (bleTask), so the ~2.7 s of
+      // erasing overlaps the transfer; an upload cut short before the first page leaves
+      // the old record intact (its CRC still matches on the next boot)
+      DBG("ble begin slot %d size %lu, mtu %d", slot, size, Bluefruit.Connection(bleConn) ? Bluefruit.Connection(bleConn)->getMtu() : -1);
       upSlot = slot; upSize = size; upWritten = 0; upFill = 0;
       rxTail = rxHead; rxOverflow = false;
       upState = UP_RECV;
+      upStartMs = millis();
+      if (BLEConnection *bc = Bluefruit.Connection(bleConn)) bc->requestConnectionParameter(CONN_FAST);
       bleReply2(0x02, 0);
       break;
     }
@@ -1484,7 +1490,10 @@ void bleCommand(const uint8_t *c, int n) {
       bool ok = upState == UP_RECV && upWritten == upSize && ctCheck(upSlot);
       upState = UP_IDLE;
       ctValid[upSlot] = ok;
-      DBG("ble end slot %d: %s", upSlot, ok ? "valid" : "INVALID");
+      BLEConnection *bc = Bluefruit.Connection(bleConn);
+      DBG("ble end slot %d: %s, %lu ms since begin, interval %d", upSlot, ok ? "valid" : "INVALID",
+          millis() - upStartMs, bc ? bc->getConnectionInterval() : -1);
+      if (bc) bc->requestConnectionParameter(CONN_IDLE);
       bleReply2(0x04, ok ? 0 : 1);
       if (screen == S_THEME) drawThemePicker();
       break;
@@ -1530,6 +1539,7 @@ void bleTask() {
     if (upFill == PAGE_SIZE || upWritten + upFill == upSize) {
       uint32_t words = (upFill + 3) / 4;
       for (uint32_t i = upFill; i < words * 4; i++) upPage[i] = 0xFF;
+      flashErasePage(CT_BASE + upSlot * CT_SLOT_BYTES + upWritten);   // upWritten is page aligned here
       flashWriteWords(CT_BASE + upSlot * CT_SLOT_BYTES + upWritten, (const uint32_t *)upPage, words);
       upWritten += upFill;
       upFill = 0;
@@ -1545,6 +1555,7 @@ void onBleConnect(uint16_t conn) {
   rxBytes = rxWrites = rxMaxLen = 0; rxMinLen = 9999;
   BLEConnection *c = Bluefruit.Connection(conn);
   DBG("ble connected, mtu %d, interval %d", c ? c->getMtu() : -1, c ? c->getConnectionInterval() : -1);
+  if (c) c->requestPHY(BLE_GAP_PHY_2MBPS);   // falls back to 1M if the central can't
 }
 void onBleDisconnect(uint16_t conn, uint8_t reason) {
   DBG("ble disconnected, reason 0x%02x; rx %lu bytes in %lu writes (len %lu..%lu)", reason, rxBytes, rxWrites, rxMinLen, rxMaxLen);

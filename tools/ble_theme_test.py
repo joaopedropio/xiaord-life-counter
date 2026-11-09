@@ -87,4 +87,5 @@ async def main(slot=0):
         print("info", (await cmd([1])).hex())
 
 
-asyncio.run(main(int(sys.argv[1]) if len(sys.argv) > 1 else 0))
+if __name__ == "__main__":   # importing (e.g. for make_record) must not upload anything
+    asyncio.run(main(int(sys.argv[1]) if len(sys.argv) > 1 else 0))

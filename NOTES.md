@@ -152,7 +152,17 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
   (na conexão o firmware sempre vê 23; ele sobe logo depois).
 - Diagnóstico no log (`DEBUG`): MTU e intervalo na conexão, bytes/escritas recebidos ao
   desconectar e `rx=bytes/escritas up=estado written=` na linha "alive".
-- Ideia para acelerar: pedir intervalo de conexão menor (hoje 30 ms; iOS aceita 15 ms).
+- **Velocidade** (medida no Mac com bleak, 58.176 bytes): iPhone/CTRL 18,0 s → **8,9 s**;
+  DATA rápido 5,0 s → **3,6 s**. Como: no BEGIN a placa pede intervalo de **15 ms**
+  (`CONN_FAST` = 12; o iOS só aceita min = max = 15 ms) e volta a 30 ms (`CONN_IDLE`) no END;
+  PHY 2M pedido na conexão; e cada página do espaço é **apagada só quando os dados dela chegam**
+  (antes o BEGIN apagava tudo em ~2,7 s). Se o envio parar antes da 1ª página, o tema antigo
+  continua válido. O log do END mostra o tempo do envio e o intervalo aplicado.
+- Compressão (RLE ~10× no tema de teste) foi considerada e **o usuário preferiu não fazer**.
+- Scripts de teste pelo Mac (no scratchpad, recriar se precisar): cópia do
+  `tools/ble_theme_test.py` com `write_gatt_char(CTRL, b"\x06" + parte, response=True)` e
+  `chunk = 243` simula o caminho do iPhone. O `ble_theme_test.py` agora só envia quando
+  executado direto (importá-lo para usar `make_record()` não envia mais nada).
 - **Com o SoftDevice ligado a flash é gravada por `sd_flash_*`** (`flashErasePage` /
   `flashWriteWords` decidem sozinhas). O RNG é lido antes do `bleBegin()`.
 - **Espaços de tema:** 2 espaços de 0xF000 em 0xCF000–0xED000. Registro = cabeçalho de 64 bytes
@@ -280,6 +290,11 @@ git clone https://github.com/Seeed-Studio/Seeed_Arduino_FS ~/Documents/Arduino/l
   rola até o editor ("Editando: nome", botão "↑ Trocar tema").
   Página na raiz do GitHub Pages (`~/joaopedropio.github.io/index.html`, visual do
   joaopedropio.dev branch `main`, fontes Geist em `assets/fonts/`) com um card por página.
+  Velocidade de envio melhorada (ver "Temas pelo site"); firmware gravado, **ainda não medido
+  no iPhone**. O espaço 0 ficou com o tema de teste (degradê) por engano: o usuário vai reenviar
+  o Engrenagens pelo iPhone, o que também mede a velocidade nova lá.
+- No Mac o atalho `python` foi criado só na pasta temporária da sessão; recriar
+  (`~/.local/bin/python` com o script de "Rodar no Mac") antes de compilar.
 
 ## Ideias para próximos passos
 - Case impresso em 3D com acesso à chave liga/desliga e ao USB-C
