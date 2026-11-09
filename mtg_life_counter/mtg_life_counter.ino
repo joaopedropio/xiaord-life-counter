@@ -4,7 +4,8 @@
 //   - Drag your finger around the outer rim: clockwise = +1, counter-clockwise = -1
 //   - Tap right of the number: +1   | hold: +10 every 0.6 s
 //   - Tap left of the number:  -1   | hold: -10 every 0.6 s
-//   - Tap the very center: menu (Reset / Standard 20 / Commander 40 / Back)
+//   - Tap the very center: menu (Reset / 20 / 40 / Dice / Back)
+//   - Dice: pick d4..d20, it rolls and shows the result until you tap the screen
 //   - Life and game mode are saved to internal flash and restored on the next boot.
 //
 // Setup (Arduino IDE / arduino-cli):
@@ -50,6 +51,7 @@ const bool  SPI_32MHZ = true;         // set false if the screen shows glitches 
 #define BACKLIGHT   D6
 #define BATTERY_PIN A0
 
+const uint16_t GREY = 0x7BEF;
 const int W = 240, H = 240;
 const int CX = 120, CY = 120;
 
@@ -60,6 +62,19 @@ uint16_t   *fbPix = nullptr;           // its pixels, already byte-swapped for S
 // ---------- State ----------
 int startingLife = 20;
 int life = 20;
+int brightness = 100;                   // backlight %, BRIGHT_MIN..100
+const int BRIGHT_MIN = 1;
+const int BRIGHT_STEP_DEG = 5;          // rim travel per 1% brightness (72% per lap)
+bool brightDirty = false;
+
+// screen auto-off: backlight off + panel asleep after this long without a touch
+const int SLEEP_SECS[] = { 0, 5, 10, 15, 30, 60, 120, 300 };     // 0 = never
+const char *SLEEP_LABELS[] = { "nunca", "5 s", "10 s", "15 s", "30 s", "1 min", "2 min", "5 min" };
+const int SLEEP_OPTIONS = sizeof(SLEEP_SECS) / sizeof(SLEEP_SECS[0]);
+int  sleepIdx = 4;                      // default 30 s
+const int MENU_MIN_SLEEP_S = 15;        // floor for the auto-off outside the life screen
+bool asleep = false;
+unsigned long lastActivityMs = 0;
 
 // what the current touch started on
 enum Zone { Z_NONE, Z_RIM, Z_CENTER, Z_PLUS, Z_MINUS, Z_MENU };
@@ -85,19 +100,27 @@ bool deltaDirty = false;
 int  wantMarkerX = -1, wantMarkerY = -1;
 int  markerX = -1, markerY = -1;
 
-bool menuOpen = false;
+// which screen is showing; everything but S_LIFE handles taps on touch end
+enum Screen { S_LIFE, S_MENU, S_DICE_PICK, S_DICE_RESULT, S_BRIGHT };
+Screen screen = S_LIFE;
 
 unsigned long lastBatteryMs = 0;
 
 // persistence (struct must be defined before any function: Arduino puts
 // auto-generated prototypes above the first function)
-struct SavedState {                      // one 12-byte record in the flash log
+struct SavedState {                      // one 16-byte record in the flash log
   uint32_t seq;                          // increases with every save; newest wins
   int16_t  life;
-  int16_t  startingLife;
+  uint8_t  startingLife;                 // 20 or 40
+  uint8_t  brightness;                   // backlight %, 1..100
+  uint8_t  sleep5s;                      // auto-off time / 5 s (0 = never)
+  uint8_t  reserved[3];                  // 0xFF; room for future settings
   uint32_t check;                        // checksum over the other fields
 };
+static_assert(sizeof(SavedState) == 16, "SavedState must be 16 bytes (4-byte flash words)");
 bool saveDirty = false;
+// menu buttons: rectangles used both for drawing and for hit-testing
+struct Btn { int x, y, w, h; const char *label; };
 unsigned long saveDirtySince = 0;
 
 // ================= Fast display flush =================
@@ -229,8 +252,8 @@ bool readTouch(int &x, int &y) {
 }
 
 // ================= Persistence (raw internal flash, append-only log) =================
-// Two 4 KB flash pages hold a log of 12-byte records. A save appends one record
-// to the active page (3 word writes, well under 1 ms, no erase). Only when that
+// Two 4 KB flash pages hold a log of 16-byte records. A save appends one record
+// to the active page (4 word writes, well under 1 ms, no erase). Only when that
 // page is full is the OTHER page erased (~85 ms) and used next; the full page
 // stays intact until then, so a power cut at any moment leaves the last good
 // record readable. On boot the valid record with the highest seq wins.
@@ -242,19 +265,26 @@ bool readTouch(int &x, int &y) {
 // is not enabled by this sketch. If BLE is added later, this must use sd_flash_*.
 const uint32_t PAGE_SIZE = 4096;
 const uint32_t STATE_PAGES[2] = { 0xF2000, 0xF3000 };
-const int SLOTS_PER_PAGE = PAGE_SIZE / sizeof(SavedState);   // 341
+const int SLOTS_PER_PAGE = PAGE_SIZE / sizeof(SavedState);   // 256
 
 int      activePage = -1;   // page holding the newest record (-1: none yet)
 int      nextSlot = 0;      // where the next record goes in activePage
 bool     activeAppendable = false;
 uint32_t lastSeq = 0;
 
+// Hashes every word before `check`. The seed changed from "MTG1" when the record
+// grew from 12 to 16 bytes, so old records never pass as new ones.
 uint32_t stateCheck(const SavedState &s) {
-  uint32_t h = 0x4D544731;                        // "MTG1"
-  h = (h ^ s.seq) * 0x9E3779B1u;
-  h = (h ^ (uint16_t)s.life) * 0x9E3779B1u;
-  h = (h ^ (uint16_t)s.startingLife) * 0x9E3779B1u;
+  uint32_t h = 0x4D544732;                        // "MTG2"
+  const uint32_t *w = (const uint32_t *)&s;
+  for (unsigned i = 0; i < sizeof(SavedState) / 4 - 1; i++) h = (h ^ w[i]) * 0x9E3779B1u;
   return h ^ (h >> 15);
+}
+
+// position of `secs` in SLEEP_SECS, or -1
+int sleepIndexOf(int secs) {
+  for (int i = 0; i < SLEEP_OPTIONS; i++) if (SLEEP_SECS[i] == secs) return i;
+  return -1;
 }
 
 const SavedState *slotPtr(int page, int slot) {
@@ -263,12 +293,14 @@ const SavedState *slotPtr(int page, int slot) {
 
 bool slotErased(const SavedState *r) {
   const uint32_t *w = (const uint32_t *)r;
-  return w[0] == 0xFFFFFFFF && w[1] == 0xFFFFFFFF && w[2] == 0xFFFFFFFF;
+  for (unsigned i = 0; i < sizeof(SavedState) / 4; i++) if (w[i] != 0xFFFFFFFF) return false;
+  return true;
 }
 
 bool slotValid(const SavedState *r) {
   return r->seq != 0xFFFFFFFF && r->check == stateCheck(*r) &&
          (r->startingLife == 20 || r->startingLife == 40) &&
+         r->brightness >= BRIGHT_MIN && r->brightness <= 100 && sleepIndexOf(r->sleep5s * 5) >= 0 &&
          r->life >= -999 && r->life <= 999;
 }
 
@@ -313,13 +345,16 @@ void loadState() {
   lastSeq = best->seq;
   life = best->life;
   startingLife = best->startingLife;
+  brightness = best->brightness;
+  sleepIdx = sleepIndexOf(best->sleep5s * 5);
   DBG("loaded life=%d start=%d (page %d slot %d seq %lu)",
       life, startingLife, activePage, nextSlot - 1, lastSeq);
 }
 
 void saveState() {
   saveDirty = false;
-  SavedState s = { lastSeq + 1, (int16_t)life, (int16_t)startingLife, 0 };
+  SavedState s = { lastSeq + 1, (int16_t)life, (uint8_t)startingLife, (uint8_t)brightness,
+                   (uint8_t)(SLEEP_SECS[sleepIdx] / 5), { 0xFF, 0xFF, 0xFF }, 0 };
   s.check = stateCheck(s);
   unsigned long t0 = micros();
 
@@ -342,8 +377,8 @@ void saveState() {
   }
   lastSeq = s.seq;
   nextSlot++;
-  DBG("saved life=%d start=%d (page %d slot %d seq %lu) in %lu us",
-      life, startingLife, activePage, nextSlot - 1, lastSeq, micros() - t0);
+  DBG("saved life=%d start=%d bright=%d sleep=%ds (page %d slot %d seq %lu) in %lu us",
+      life, startingLife, brightness, SLEEP_SECS[sleepIdx], activePage, nextSlot - 1, lastSeq, micros() - t0);
 }
 
 void requestSave() {
@@ -404,15 +439,6 @@ void drawDelta() {
   markDirty(CX - DELTA_W / 2, DELTA_Y - DELTA_H / 2, DELTA_W, DELTA_H);
 }
 
-void drawStartLabel() {
-  fb.fillRect(CX - 50, CY + 47, 100, 18, TFT_BLACK);
-  fb.setTextDatum(MC_DATUM);
-  fb.setTextPadding(0);
-  fb.setTextColor(0x7BEF, TFT_BLACK); // grey
-  fb.drawString(startingLife == 40 ? "Commander" : "Standard", CX, CY + 55, 2);
-  markDirty(CX - 50, CY + 47, 100, 18);
-}
-
 // Approximate reading; battery is behind a 1/2 divider on A0.
 int batteryPercent() {
   analogReference(AR_INTERNAL_2_4);
@@ -421,19 +447,38 @@ int batteryPercent() {
   for (int i = 0; i < 16; i++) raw += analogRead(BATTERY_PIN);
   raw /= 16;
   float volts = raw * 2.4f / 4095.0f * 2.0f;
+  DBG("battery raw=%ld mV=%d vbus=%d", raw, (int)(volts * 1000),
+      (int)((NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0));
   int pct = (int)((volts - 3.3f) / (4.2f - 3.3f) * 100.0f);
   return constrain(pct, 0, 100);
 }
 
+// USB power present. The Round Display's charger has no status line to the MCU,
+// so "USB connected" is the best "charging" signal available.
+bool usbPowered() {
+  return (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
+}
+bool shownUsb = false;
+
+// small lightning bolt centered on (bx, by), 14 px tall
+void drawBolt(int bx, int by, uint16_t color) {
+  fb.fillTriangle(bx + 3, by - 7, bx - 4, by + 1, bx + 1, by + 1, color);
+  fb.fillTriangle(bx - 1, by - 1, bx + 4, by - 1, bx - 3, by + 7, color);
+}
+
 void drawBattery() {
-  if (menuOpen) return;                 // menu covers it; redrawn when the menu closes
+  if (screen != S_LIFE) return;         // menu covers it; redrawn when the menu closes
   int pct = batteryPercent();
-  fb.fillRect(CX - 25, CY + 72, 50, 18, TFT_BLACK);
+  shownUsb = usbPowered();
+  fb.fillRect(CX - 40, CY + 72, 80, 18, TFT_BLACK);
   fb.setTextDatum(MC_DATUM);
   fb.setTextPadding(0);
-  fb.setTextColor(pct < 20 ? TFT_RED : 0x7BEF, TFT_BLACK);
-  fb.drawString(String(pct) + "%", CX, CY + 80, 2);
-  markDirty(CX - 25, CY + 72, 50, 18);
+  fb.setTextColor(pct < 20 && !shownUsb ? TFT_RED : GREY, TFT_BLACK);
+  String txt = String(pct) + "%";
+  int tx = shownUsb ? CX + 8 : CX;      // make room for the bolt
+  fb.drawString(txt, tx, CY + 80, 2);
+  if (shownUsb) drawBolt(tx - fb.textWidth(txt, 2) / 2 - 9, CY + 80, TFT_YELLOW);
+  markDirty(CX - 40, CY + 72, 80, 18);
 }
 
 void fullRedraw() {
@@ -442,7 +487,6 @@ void fullRedraw() {
   drawRing();
   drawLife();
   drawDelta();
-  drawStartLabel();
   drawBattery();
   drawMarker();
   markDirty(0, 0, W, H);
@@ -450,50 +494,209 @@ void fullRedraw() {
   flush();
 }
 
-// ================= Menu =================
-enum MenuItem { M_RESET, M_STANDARD, M_COMMANDER, M_BACK, M_COUNT };
-const char *MENU_LABELS[M_COUNT] = { "Reiniciar", "Standard 20", "Commander 40", "Voltar" };
-const int MENU_W = 150, MENU_H = 34, MENU_GAP = 6;
-const int MENU_TOP = CY - (M_COUNT * MENU_H + (M_COUNT - 1) * MENU_GAP) / 2;
+// ================= Menu & dice =================
+const uint16_t BTN_FILL = 0x18E3;       // very dark grey
 
-int menuItemY(int i) { return MENU_TOP + i * (MENU_H + MENU_GAP); }
-
-void drawMenu() {
-  fb.fillSprite(TFT_BLACK);
-  markerX = markerY = -1;
+void drawButton(const Btn &b, uint16_t border) {
+  fb.fillRoundRect(b.x, b.y, b.w, b.h, 10, BTN_FILL);
+  fb.drawRoundRect(b.x, b.y, b.w, b.h, 10, border);
   fb.setTextDatum(MC_DATUM);
   fb.setTextPadding(0);
+  fb.setTextColor(TFT_WHITE, BTN_FILL);
+  fb.drawString(b.label, b.x + b.w / 2, b.y + b.h / 2 + 1, 4);   // font 4 = 26 px
+}
+
+// index of the button under (x, y), or -1
+int buttonAt(const Btn *btns, int n, int x, int y) {
+  for (int i = 0; i < n; i++) {
+    const Btn &b = btns[i];
+    if (x >= b.x - 3 && x < b.x + b.w + 3 && y >= b.y - 3 && y < b.y + b.h + 3) return i;
+  }
+  return -1;
+}
+
+// Main menu: 4 rows of 40 px (+8 px gaps) centered; row 2 holds "20" and "40".
+enum MenuItem { M_RESET, M_20, M_40, M_DICE, M_LIGHT, M_BACK, M_COUNT };
+const Btn MENU_BTNS[M_COUNT] = {
+  { 50,  28, 140, 40, "Reiniciar" },
+  { 50,  76,  66, 40, "20" },
+  { 124, 76,  66, 40, "40" },
+  { 50, 124,  66, 40, "Dado" },
+  { 124, 124, 66, 40, "Luz" },
+  { 50, 172, 140, 40, "Voltar" },
+};
+
+// Dice picker: 3x2 grid of dice + "Voltar".
+const int DICE_COUNT = 6;
+const int DICE_SIDES[DICE_COUNT] = { 4, 6, 8, 10, 12, 20 };
+const Btn DICE_BTNS[DICE_COUNT + 1] = {
+  { 28,  48, 56, 48, "d4" },  { 92,  48, 56, 48, "d6" },  { 156,  48, 56, 48, "d8" },
+  { 28, 104, 56, 48, "d10" }, { 92, 104, 56, 48, "d12" }, { 156, 104, 56, 48, "d20" },
+  { 60, 164, 120, 40, "Voltar" },
+};
+
+void showScreen(Screen s) {
+  screen = s;
+  wantMarkerX = wantMarkerY = -1;
+  fb.fillSprite(TFT_BLACK);
+  markerX = markerY = -1;
+}
+
+void drawMenu() {
+  showScreen(S_MENU);
   for (int i = 0; i < M_COUNT; i++) {
-    int y = menuItemY(i);
-    bool current = (i == M_STANDARD && startingLife == 20) || (i == M_COMMANDER && startingLife == 40);
-    uint16_t border = (i == M_RESET) ? TFT_ORANGE : (current ? TFT_GREEN : 0x7BEF);
-    fb.fillRoundRect(CX - MENU_W / 2, y, MENU_W, MENU_H, 10, 0x18E3); // very dark grey
-    fb.drawRoundRect(CX - MENU_W / 2, y, MENU_W, MENU_H, 10, border);
-    fb.setTextColor(TFT_WHITE, 0x18E3);
-    fb.drawString(MENU_LABELS[i], CX, y + MENU_H / 2, 2);
+    bool current = (i == M_20 && startingLife == 20) || (i == M_40 && startingLife == 40);
+    uint16_t border = (i == M_RESET) ? TFT_ORANGE : (current ? TFT_GREEN : GREY);
+    drawButton(MENU_BTNS[i], border);
   }
   markDirty(0, 0, W, H);
   flush();
 }
 
-int menuItemAt(int x, int y) {
-  if (abs(x - CX) > MENU_W / 2) return -1;
-  for (int i = 0; i < M_COUNT; i++) {
-    int top = menuItemY(i);
-    if (y >= top - MENU_GAP / 2 && y < top + MENU_H + MENU_GAP / 2) return i;
+void drawDicePicker() {
+  showScreen(S_DICE_PICK);
+  for (int i = 0; i <= DICE_COUNT; i++) drawButton(DICE_BTNS[i], GREY);
+  markDirty(0, 0, W, H);
+  flush();
+}
+
+// Big result: font 7 (7-segment, 48 px) scaled x2 = 96 px digits.
+const int DICE_NUM_Y = CY + 8, DICE_NUM_W = 200, DICE_NUM_H = 110;
+
+void drawDiceNumber(int v, uint16_t color) {
+  fb.fillRect(CX - DICE_NUM_W / 2, DICE_NUM_Y - DICE_NUM_H / 2, DICE_NUM_W, DICE_NUM_H, TFT_BLACK);
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  fb.setTextSize(2);
+  fb.setTextColor(color, TFT_BLACK);
+  fb.drawString(String(v), CX, DICE_NUM_Y, 7);
+  fb.setTextSize(1);
+  markDirty(CX - DICE_NUM_W / 2, DICE_NUM_Y - DICE_NUM_H / 2, DICE_NUM_W, DICE_NUM_H);
+  flush();
+}
+
+void rollDice(int sides) {
+  showScreen(S_DICE_RESULT);
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  fb.setTextColor(GREY, TFT_BLACK);
+  fb.drawString("d" + String(sides), CX, 40, 4);
+  fb.drawString("toque para sair", CX, 205, 2);
+  markDirty(0, 0, W, H);
+  flush();
+
+  // short shuffle animation, then the real roll
+  for (int i = 0; i < 8; i++) {
+    drawDiceNumber(random(1, sides + 1), GREY);
+    delay(50);
   }
-  return -1;
+  int v = random(1, sides + 1);
+  uint16_t color = (v == sides) ? TFT_GREEN : (v == 1 ? TFT_RED : TFT_WHITE);
+  drawDiceNumber(v, color);
+  DBG("dice d%d -> %d", sides, v);
+}
+
+// Backlight PWM on D6 (active high).
+void applyBrightness() {
+  analogWrite(BACKLIGHT, brightness * 255 / 100);
+}
+
+// Brightness screen: works like the life screen. "-" / "+" tap = 1%, hold = 10%
+// repeating; dragging around the rim = 1% per BRIGHT_STEP_DEG. The "apagar tela"
+// button cycles the auto-off time. OK saves and goes back.
+enum { B_MINUS, B_PLUS, B_SLEEP, B_OK, B_COUNT };
+const Btn BRIGHT_BTNS[B_COUNT] = {
+  { 34,  62, 52, 50, "-" },
+  { 154, 62, 52, 50, "+" },
+  { 65, 142, 110, 36, nullptr },        // label: SLEEP_LABELS[sleepIdx]
+  { 80, 186, 80, 32, "OK" },
+};
+
+void drawBrightnessValue() {
+  fb.fillRect(CX - 31, 72, 62, 30, TFT_BLACK);
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  fb.setTextColor(TFT_WHITE, TFT_BLACK);
+  fb.drawString(String(brightness) + "%", CX, 88, 4);
+  markDirty(CX - 31, 72, 62, 30);
+}
+
+void drawSleepButton() {
+  Btn b = BRIGHT_BTNS[B_SLEEP];
+  b.label = SLEEP_LABELS[sleepIdx];
+  drawButton(b, GREY);
+  markDirty(b.x, b.y, b.w, b.h);
+}
+
+void drawBrightness() {
+  showScreen(S_BRIGHT);
+  drawRing();
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  fb.setTextColor(GREY, TFT_BLACK);
+  fb.drawString("Brilho", CX, 40, 4);
+  fb.drawString("apagar tela", CX, 130, 2);
+  drawButton(BRIGHT_BTNS[B_MINUS], GREY);
+  drawButton(BRIGHT_BTNS[B_PLUS], GREY);
+  drawButton(BRIGHT_BTNS[B_OK], TFT_GREEN);
+  drawSleepButton();
+  drawBrightnessValue();
+  markDirty(0, 0, W, H);
+  flush();
+}
+
+void changeBrightness(int d) {
+  int b = constrain(brightness + d, BRIGHT_MIN, 100);
+  if (b == brightness) return;
+  brightness = b;
+  applyBrightness();
+  brightDirty = true;
+}
+
+void onBrightnessTap(int x, int y) {
+  int i = buttonAt(BRIGHT_BTNS, B_COUNT, x, y);
+  if (i == B_SLEEP) {
+    sleepIdx = (sleepIdx + 1) % SLEEP_OPTIONS;
+    DBG("auto-off %d s", SLEEP_SECS[sleepIdx]);
+    drawSleepButton();
+    flush();
+  } else if (i == B_OK) {
+    DBG("brightness %d, auto-off %d s saved", brightness, SLEEP_SECS[sleepIdx]);
+    requestSave();
+    closeMenu();
+  }
+}
+
+// ---- screen auto-off ----
+// GC9A01: 0x28 display off, 0x10 sleep in / 0x11 sleep out, 0x29 display on.
+// The panel keeps its RAM while asleep; we still repaint everything on wake.
+void screenSleep() {
+  DBG("screen off");
+  asleep = true;
+  wantMarkerX = wantMarkerY = -1;
+  analogWrite(BACKLIGHT, 0);
+  tft.writecommand(0x28);
+  tft.writecommand(0x10);
+}
+
+void screenWake() {
+  DBG("screen on");
+  asleep = false;
+  tft.writecommand(0x11);
+  delay(120);                           // sleep-out settle time (datasheet)
+  tft.writecommand(0x29);
+  markDirty(0, 0, W, H);
+  flush();
+  applyBrightness();
 }
 
 void openMenu() {
   DBG("menu open");
-  menuOpen = true;
-  wantMarkerX = wantMarkerY = -1;
   drawMenu();
 }
 
 void closeMenu() {
-  menuOpen = false;
+  screen = S_LIFE;
   fullRedraw();
 }
 
@@ -505,16 +708,50 @@ void resetGame(int start) {
 }
 
 void onMenuTap(int x, int y) {
-  int item = menuItemAt(x, y);
+  int item = buttonAt(MENU_BTNS, M_COUNT, x, y);
   DBG("menu tap item=%d", item);
   switch (item) {
-    case M_RESET:     resetGame(startingLife); break;
-    case M_STANDARD:  resetGame(20); break;
-    case M_COMMANDER: resetGame(40); break;
-    case M_BACK:      break;
-    default:          return;           // tapped outside the buttons: keep the menu open
+    case M_RESET: resetGame(startingLife); break;
+    case M_20:    resetGame(20); break;
+    case M_40:    resetGame(40); break;
+    case M_DICE:  drawDicePicker(); return;
+    case M_LIGHT: drawBrightness(); return;
+    case M_BACK:  break;
+    default:      return;               // tapped outside the buttons: keep the menu open
   }
   closeMenu();
+}
+
+void onDicePickTap(int x, int y) {
+  int i = buttonAt(DICE_BTNS, DICE_COUNT + 1, x, y);
+  DBG("dice pick tap item=%d", i);
+  if (i < 0) return;                    // outside the buttons: stay
+  if (i == DICE_COUNT) closeMenu();     // Voltar
+  else rollDice(DICE_SIDES[i]);
+}
+
+void onScreenTap(int x, int y) {
+  switch (screen) {
+    case S_MENU:        onMenuTap(x, y); break;
+    case S_DICE_PICK:   onDicePickTap(x, y); break;
+    case S_DICE_RESULT: closeMenu(); break;   // any tap leaves the result
+    case S_BRIGHT:      onBrightnessTap(x, y); break;
+    default: break;
+  }
+}
+
+// Seed random() from the nRF52 hardware RNG (free to use: SoftDevice is off).
+void seedRandom() {
+  uint32_t seed = 0;
+  NRF_RNG->CONFIG = RNG_CONFIG_DERCEN_Enabled << RNG_CONFIG_DERCEN_Pos;  // bias correction
+  NRF_RNG->TASKS_START = 1;
+  for (int i = 0; i < 4; i++) {
+    NRF_RNG->EVENTS_VALRDY = 0;
+    while (!NRF_RNG->EVENTS_VALRDY) {}
+    seed = (seed << 8) | NRF_RNG->VALUE;
+  }
+  NRF_RNG->TASKS_STOP = 1;
+  randomSeed(seed);
 }
 
 // ================= Logic =================
@@ -524,6 +761,12 @@ void changeLife(int d) {
   lastChangeMs = millis();
   lifeDirty = deltaDirty = true;
   requestSave();
+}
+
+// +/- from taps, holds and the rim: changes whatever the current screen controls
+void nudge(int d) {
+  if (screen == S_BRIGHT) changeBrightness(d);
+  else changeLife(d);
 }
 
 float angleOf(int x, int y) {
@@ -536,14 +779,29 @@ int distOf(int x, int y) {
 }
 
 Zone zoneOf(int x, int y) {
-  if (menuOpen) return Z_MENU;
   int d = distOf(x, y);
+  if (screen == S_BRIGHT) {
+    int b = buttonAt(BRIGHT_BTNS, B_COUNT, x, y);
+    if (b == B_MINUS) return Z_MINUS;
+    if (b == B_PLUS)  return Z_PLUS;
+    if (b < 0 && d >= RIM_INNER_R) return Z_RIM;
+    return Z_MENU;                      // OK (or empty space): handled on touch end
+  }
+  if (screen != S_LIFE) return Z_MENU;
   if (d >= RIM_INNER_R) return Z_RIM;
   if (d < CENTER_R)     return Z_CENTER;
   return (x >= CX) ? Z_PLUS : Z_MINUS;
 }
 
 void onTouchStart(int x, int y) {
+  lastActivityMs = millis();
+  if (asleep) {                         // this touch only wakes the screen
+    screenWake();
+    touching = true;
+    zone = Z_NONE;
+    DBG("wake touch ignored");
+    return;
+  }
   touching = true;
   touchX = x; touchY = y;
   touchStart = millis();
@@ -569,8 +827,11 @@ void onTouchMove(int x, int y) {
   if (INVERT_DIRECTION) d = -d;
   angleAccum += d;
 
-  while (angleAccum >= STEP_DEGREES)  { changeLife(+1); angleAccum -= STEP_DEGREES; }
-  while (angleAccum <= -STEP_DEGREES) { changeLife(-1); angleAccum += STEP_DEGREES; }
+  const float step = (screen == S_BRIGHT) ? BRIGHT_STEP_DEG : STEP_DEGREES;
+  while (angleAccum >= step)  { nudge(+1); angleAccum -= step; }
+  while (angleAccum <= -step) { nudge(-1); angleAccum += step; }
+
+  if (screen != S_LIFE) return;         // the dot is only drawn on the life screen
 
   // marker dot snapped onto the ring
   float rad = a * PI / 180.0f;
@@ -584,7 +845,7 @@ void checkHold() {
   if (millis() - lastHoldMs >= HOLD_MS) {
     lastHoldMs = millis();
     holdFired = true;
-    changeLife(zone == Z_PLUS ? +10 : -10);
+    nudge(zone == Z_PLUS ? +10 : -10);
   }
 }
 
@@ -594,10 +855,10 @@ void onTouchEnd() {
   touching = false;
   wantMarkerX = wantMarkerY = -1;
   switch (zone) {
-    case Z_PLUS:   if (!holdFired) changeLife(+1); break;
-    case Z_MINUS:  if (!holdFired) changeLife(-1); break;
+    case Z_PLUS:   if (!holdFired) nudge(+1); break;
+    case Z_MINUS:  if (!holdFired) nudge(-1); break;
     case Z_CENTER: if (held < MENU_TAP_MAX_MS) openMenu(); break;
-    case Z_MENU:   onMenuTap(touchX, touchY); break;
+    case Z_MENU:   onScreenTap(touchX, touchY); break;
     default: break;
   }
   zone = Z_NONE;
@@ -607,33 +868,44 @@ void onTouchEnd() {
 void setup() {
 #if DEBUG
   Serial.begin(115200);
-  unsigned long t0 = millis();
-  while (!Serial && millis() - t0 < 3000) delay(10); // wait up to 3 s for the monitor
 #endif
-  DBG("boot");
   pinMode(TOUCH_INT, INPUT_PULLUP);
   pinMode(BACKLIGHT, OUTPUT);
-  digitalWrite(BACKLIGHT, HIGH);
+  digitalWrite(BACKLIGHT, LOW);         // dark until the first real frame is on the panel
   Wire.begin();
 
   loadState();
 
   tft.init();
   tft.setRotation(0);
-  tft.fillScreen(TFT_BLACK);
 
   fb.setColorDepth(16);
   fbPix = (uint16_t *)fb.createSprite(W, H);
   if (!fbPix) {
-    DBG("framebuffer alloc FAILED");
+    digitalWrite(BACKLIGHT, HIGH);
+    tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.drawString("no RAM for framebuffer", 20, 110, 2);
     while (true) delay(1000);
   }
 
+  seedRandom();
+
   unsigned long t1 = micros();
   fullRedraw();
-  DBG("full frame in %lu us", micros() - t1);
+  applyBrightness();                    // light up only once the first frame is on the panel
+  unsigned long frameUs = micros() - t1;
+
+#if DEBUG
+  // On USB, give the serial monitor up to 3 s to attach (the life screen is already up).
+  // On battery there is no host, so don't wait at all.
+  if (usbPowered()) {
+    unsigned long t0 = millis();
+    while (!Serial && millis() - t0 < 3000) delay(10);
+  }
+#endif
+  lastActivityMs = millis();
+  DBG("boot (life=%d start=%d bright=%d sleep=%ds), first frame in %lu us", life, startingLife, brightness, SLEEP_SECS[sleepIdx], frameUs);
 }
 
 void loop() {
@@ -648,6 +920,7 @@ void loop() {
   int x, y;
   if (touchReady() && readTouch(x, y)) {
     lastTouchReadMs = millis();
+    lastActivityMs = lastTouchReadMs;
     if (!touching) onTouchStart(x, y);
     else           onTouchMove(x, y);
   } else if (touching && millis() - lastTouchReadMs > RELEASE_MS) {
@@ -661,10 +934,19 @@ void loop() {
     deltaDirty = true;
   }
 
-  // refresh battery every 30 s
-  if (millis() - lastBatteryMs > 30000) {
+  // refresh battery every 30 s, or right away when USB is plugged / unplugged
+  if (millis() - lastBatteryMs > 30000 || (screen == S_LIFE && usbPowered() != shownUsb)) {
     lastBatteryMs = millis();
     drawBattery();
+  }
+
+  // auto-off after SLEEP_SECS of no touches; menus / dice / brightness get at least
+  // MENU_MIN_SLEEP_S so a short setting doesn't blank them mid-choice
+  int sleepS = SLEEP_SECS[sleepIdx];
+  if (sleepS > 0 && screen != S_LIFE) sleepS = max(sleepS, MENU_MIN_SLEEP_S);
+  if (!asleep && !touching && sleepS > 0 &&
+      millis() - lastActivityMs > (unsigned long)sleepS * 1000UL) {
+    screenSleep();
   }
 
   // save to flash once things have been quiet for a moment (and not mid-touch)
@@ -672,13 +954,18 @@ void loop() {
 
   // one frame: draw what changed into the framebuffer, then push the dirty rect
   static unsigned long lastFrame = 0;
-  if (!menuOpen && millis() - lastFrame >= FRAME_MS) {
+  if (!asleep && (screen == S_LIFE || screen == S_BRIGHT) && millis() - lastFrame >= FRAME_MS) {
     lastFrame = millis();
-    if (lifeDirty)  { lifeDirty = false;  drawLife(); }
-    if (deltaDirty) { deltaDirty = false; drawDelta(); }
+    if (screen == S_LIFE) {
+      if (lifeDirty)  { lifeDirty = false;  drawLife(); }
+      if (deltaDirty) { deltaDirty = false; drawDelta(); }
+    } else if (brightDirty) {
+      brightDirty = false;
+      drawBrightnessValue();
+    }
     drawMarker();
     flush();
   }
 
-  delay(2);
+  delay(asleep ? 20 : 2);               // asleep: poll the touch less often
 }

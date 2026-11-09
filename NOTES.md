@@ -64,12 +64,32 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
   **Bolinha laranja** segue o dedo na borda.
 - **Toque à direita do número:** +1. **À esquerda:** -1.
 - **Segurar à direita/esquerda:** +10/-10 após 600 ms, repetindo a cada 600 ms.
-- **Toque bem no centro** (< 30 px): abre o menu — Reiniciar / Standard 20 /
-  Commander 40 / Voltar (o modo atual tem borda verde; tocar fora não fecha).
+- **Toque bem no centro** (< 30 px): abre o menu (fonte 4, 26 px) — Reiniciar /
+  20 | 40 / Dado | Luz / Voltar (o modo atual tem borda verde; tocar fora não fecha).
+- **Brilho:** Menu → Luz. Funciona como a vida: toque em "-" / "+" = 1%, segurar =
+  10% repetindo, arrastar na borda = 1% a cada 5° (`BRIGHT_STEP_DEG`). Faixa 1–100%.
+  Muda na hora; OK salva. PWM no D6 (`analogWrite`).
+- **Apagar tela:** na mesma tela, o botão abaixo de "apagar tela" alterna nunca /
+  5 s / 10 s / 15 s / 30 s (padrão) / 1 min / 2 min / 5 min (`SLEEP_SECS`). Na flash
+  vai o tempo em unidades de 5 s (não o índice), então a lista pode mudar.
+  Fora da tela de vida (menu, dado, brilho) o tempo é no mínimo 15 s (`MENU_MIN_SLEEP_S`). Sem toque por esse
+  tempo: backlight em 0 + GC9A01 em sleep (0x28, 0x10). O primeiro toque só acorda a
+  tela (0x11, 120 ms, 0x29, repinta tudo) e é ignorado, para não mudar a vida sem querer.
+- **Dado:** Menu → Dado → escolher d4, d6, d8, d10, d12 ou d20 (ou Voltar). Faz uma
+  animação curta e mostra o resultado em fonte grande (fonte 7 ×2, ~96 px; verde no
+  máximo, vermelho no 1). Fica na tela até um toque, que volta para a vida. O
+  `random()` é semeado no boot pelo RNG de hardware (`NRF_RNG`).
+- Não há mais rótulo "Standard"/"Commander" embaixo do número.
 - **Indicador "+3" / "-2"** acima do número, some 2 s após a última mudança.
 - **Cores do número:** branco > 10, amarelo ≤ 10, laranja ≤ 5, vermelho ≤ 0.
 - **Bateria em %** na parte de baixo, atualiza a cada 30 s (vermelho abaixo de 20%).
-- **Salvamento:** vida e modo são salvos na flash 3 s após a última mudança (com o
+  **Raio amarelo** ao lado = USB conectado (VBUS). O carregador da Round Display não
+  informa o estado de carga ao XIAO, então "USB ligado" é o melhor sinal de "carregando".
+  A % só funciona com a **DIP "ON KE" nas duas posições em ON** (em OFF o A0 lê ruído ~0,4 V → 0%).
+- **Boot:** a tela de vida é desenhada logo após `tft.init()` e o backlight só acende
+  com ela pronta (sem splash: o boot já é rápido). A espera de até 3 s pelo monitor
+  serial vem depois e só acontece no USB (VBUS); na bateria não há espera.
+- **Salvamento:** vida, modo, brilho e tempo de apagar são salvos na flash 3 s após a última mudança (com o
   dedo fora da tela) e restaurados no boot.
 
 ## Decisões técnicas (e por quê)
@@ -89,9 +109,10 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
 - **Filtro de saltos:** leituras com mais de 60° de diferença da anterior são
   ignoradas (`MAX_JUMP_DEG`) — evitavam inversão de sentido no slider.
 - **Salvamento direto na flash (NVMC):** log append-only de registros de 12 bytes
-  (seq + vida + modo + checksum) em duas páginas: 0xF2000 e 0xF3000 (fim da área
+  de 16 bytes (seq + vida + modo + brilho + apagar + 3 bytes reservados + checksum
+  "MTG2"; 256 registros por página). Registros antigos de 12 bytes não são lidos. em duas páginas: 0xF2000 e 0xF3000 (fim da área
   reservada ao InternalFS, que não é tocada por uploads de firmware). Salvar = 3
-  escritas de word (< 1 ms); só apaga a outra página quando a atual enche (341
+  escritas de word (< 1 ms); só apaga a outra página quando a atual enche (256
   registros, ~85 ms). No boot vale o registro válido de maior seq. Substituiu o
   LittleFS, que levava ~640 ms por salvamento.
   **Se o BLE (SoftDevice) for ativado, trocar por `sd_flash_write`/`sd_flash_page_erase`.**
@@ -108,9 +129,15 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
 ## Status (2026-11-08)
 - Testado no hardware via USB: tela, orientação do touch, sentido do slider,
   fluidez, toques laterais, menu e salvamento/restauração funcionando.
-- Ainda não testado: funcionamento na bateria (cabo pendente de correção) e se a
-  porcentagem da bateria é plausível (fórmula aproximada: ADC 12 bits, referência
-  interna 2.4V, divisor 1/2, faixa 3.3V–4.2V).
+- Bateria ligada (polaridade corrigida). Com a DIP em ON a leitura deu 4,16 V no USB.
+- `arduino-cli upload` NÃO recompila: sempre rodar `compile` antes.
+- 2026-11-08 (2ª sessão), gravado e com boot conferido no log: sem rótulo do modo,
+  menu 20/40, dado, fonte grande nos menus, raio de USB na bateria, boot rápido,
+  brilho 1–100% (toque/segurar/borda) e apagar tela configurável. Testado pelo
+  usuário: dado, brilho, apagar/acordar. Ainda não confirmado na tela: opções
+  5 s / 10 s e o mínimo de 15 s fora da tela de vida.
+- O log `battery raw=… mV=… vbus=…` em `batteryPercent()` foi posto para
+  diagnóstico; pode sair quando `DEBUG` for desligado.
 
 ## Ideias para próximos passos
 - Fonte mais bonita para os números (fonte custom em vez da fonte 8 do TFT_eSPI)
