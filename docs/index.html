@@ -1,0 +1,483 @@
+<!doctype html>
+<!--
+  MTG Life theme editor: builds a custom theme and sends it to the life counter
+  over Web Bluetooth. Maintained in joaopedropio/xiaord-life-counter at docs/,
+  next to the firmware it talks to; copy index.html and themes.js to mtg-life/
+  in joaopedropio.github.io to publish.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MTG Life — temas</title>
+<meta name="theme-color" content="#0e0f11">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0e0f11; --card:#17191c; --card2:#1f2226; --text:#ecebe8; --muted:#9097a0; --line:#2b2f34; --acc:#f8b400; --ok:#3ccf6a; --err:#ff5a5a; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  html { -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:"Noto Sans",system-ui,sans-serif; font-size:15px; }
+  main { max-width:760px; margin:0 auto; padding:16px 16px 48px; }
+  h1 { font-size:22px; margin:8px 0 2px; }
+  h2 { font-size:17px; margin:0 0 10px; }
+  p { margin:0 0 10px; line-height:1.45; }
+  .muted { color:var(--muted); font-size:13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-top:14px; }
+  button, select, input[type=text] { font:inherit; color:var(--text); background:var(--card2); border:1px solid var(--line); border-radius:10px; padding:10px 14px; }
+  button { cursor:pointer; font-weight:600; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--acc); color:#1a1300; border-color:transparent; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .status { display:flex; align-items:center; gap:8px; font-size:14px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#555; flex:none; }
+  .dot.on { background:var(--ok); }
+  .warn { background:#2a1f08; border:1px solid #5a4210; color:#ffd88a; border-radius:10px; padding:10px 12px; font-size:14px; margin-top:10px; }
+  .builtins { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .builtins button { padding:12px 4px; font-size:16px; }
+  .builtins button.cur { outline:2px solid #fff; outline-offset:1px; }
+  .presets { display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr)); gap:10px; }
+  .preset { background:none; border:none; padding:0; color:var(--text); font-weight:500; font-size:12px; display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .preset .th { width:72px; height:72px; border-radius:50%; overflow:hidden; box-shadow:0 0 0 2px #2a2d31; }
+  .preset .th svg { width:100%; height:100%; display:block; }
+  .preset.sel .th { box-shadow:0 0 0 3px var(--acc); }
+  .editor { display:grid; grid-template-columns:auto 1fr; gap:18px; align-items:start; }
+  @media (max-width:600px) { .editor { grid-template-columns:1fr; justify-items:center; } }
+  .screen { width:264px; height:264px; border-radius:50%; overflow:hidden; background:#000; box-shadow:0 0 0 8px #222, 0 0 0 9px #333; }
+  .screen canvas { width:100%; height:100%; display:block; }
+  .fields { display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; width:100%; }
+  .fields label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .fields label.full { grid-column:1 / -1; }
+  .fields input[type=color] { width:100%; height:38px; border:1px solid var(--line); border-radius:8px; background:var(--card2); padding:2px; }
+  .fields input[type=range] { width:100%; }
+  .chk { flex-direction:row !important; align-items:center; gap:8px !important; font-size:14px !important; color:var(--text) !important; }
+  progress { width:100%; height:10px; accent-color:var(--acc); }
+  .slots { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .slots button { display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .slots small { font-weight:400; color:var(--muted); }
+  #log { font-size:13px; color:var(--muted); min-height:1.4em; }
+  #log.err { color:var(--err); }
+  #log.ok { color:var(--ok); }
+  footer { margin-top:24px; font-size:12px; color:var(--muted); line-height:1.5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MTG Life — temas</h1>
+  <p class="muted">Crie um tema e mande para o contador de vida pelo Bluetooth.</p>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <div class="status"><span class="dot" id="dot"></span><span id="connText">Desconectado</span></div>
+      <button class="primary" id="connect">Conectar</button>
+    </div>
+    <div class="warn" id="noBle" hidden></div>
+  </section>
+
+  <section class="card">
+    <h2>Temas do aparelho</h2>
+    <div class="builtins" id="builtins"></div>
+    <p class="muted" style="margin-top:10px">Os 6 primeiros vêm no firmware. Os espaços 1 e 2 guardam temas enviados daqui.</p>
+  </section>
+
+  <section class="card">
+    <h2>Criar tema</h2>
+    <p class="muted">Escolha uma base e ajuste. A prévia mostra exatamente as 256 cores que vão para a tela.</p>
+    <div class="presets" id="presets"></div>
+  </section>
+
+  <section class="card">
+    <div class="editor">
+      <div class="screen"><canvas id="preview" width="480" height="480"></canvas></div>
+      <div class="fields">
+        <label class="full">Nome <input type="text" id="name" maxlength="19"></label>
+        <label>Fundo <input type="color" id="c_bg"></label>
+        <label>Número <input type="color" id="c_num"></label>
+        <label>Anel (topo) <input type="color" id="c_ring0"></label>
+        <label>Anel (base) <input type="color" id="c_ring1"></label>
+        <label>Destaque <input type="color" id="c_acc"></label>
+        <label>Texto (bateria) <input type="color" id="c_muted"></label>
+        <label>Efeito no número
+          <select id="fx"><option value="0">Nenhum</option><option value="1">Sombra</option><option value="2">Degradê</option></select></label>
+        <label>Cor do efeito <input type="color" id="c_fx"></label>
+        <label class="chk full"><input type="checkbox" id="deco" checked> Decoração do tema</label>
+        <label class="full">Imagem de fundo (opcional) <input type="file" id="photo" accept="image/*"></label>
+        <label class="full" id="darkWrap" hidden>Escurecer a imagem <input type="range" id="dark" min="0" max="90" value="45"></label>
+        <label class="full">Vida na prévia <input type="range" id="life" min="-5" max="60" value="33"></label>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Enviar para o aparelho</h2>
+    <div class="slots" id="slots"></div>
+    <div style="margin-top:12px"><progress id="prog" max="1" value="0"></progress></div>
+    <div id="log"></div>
+  </section>
+
+  <footer>
+    Funciona no Chrome/Edge (Android, Windows, Mac, Linux). No iPhone o Safari não tem Bluetooth para sites:
+    use o app gratuito <b>Bluefy</b> e abra este endereço nele.<br>
+    O tema vai como uma imagem de 240×240 com 256 cores (~57 KB); o número, o “+3”, a bateria e a bolinha são desenhados pelo aparelho por cima.
+  </footer>
+</main>
+
+<script src="themes.js"></script>
+<script>
+'use strict';
+// ================= theme being edited =================
+const BUILTIN = ['Padrão', 'W', 'U', 'B', 'R', 'G'];
+const BUILTIN_COLORS = ['#181c18', '#f8f4c8', '#3894f8', '#a858d8', '#f84430', '#38d058'];
+const presets = THEMES.filter(t => t.group !== 'Atuais (2 cores)')
+  .sort((a, b) => (b.group === 'Criativos') - (a.group === 'Criativos'));
+const EDIT = THEMES.length;              // the edited copy lives at the end of THEMES
+let photo = null;                        // HTMLImageElement or null
+const $ = id => document.getElementById(id);
+
+function loadPreset(t) {
+  const c = { ...t, ring: [...t.ring], warn: [...t.warn], fx: t.fx ? { ...t.fx } : {} };
+  let fx = 0, fxc = t.acc2 || t.acc;
+  if (c.fx.grad) { fx = 2; fxc = c.fx.grad[c.fx.grad.length - 1]; }
+  else if (c.fx.shadow) { fx = 1; fxc = c.fx.shadow[0]; }
+  else if (c.fx.glow) { fx = 1; fxc = c.fx.glow; c.fx = { shadow: [c.fx.glow, 2, 2] }; }
+  THEMES[EDIT] = c;
+  S.theme = EDIT;
+  $('name').value = t.name.slice(0, 19);
+  $('c_bg').value = c.bg; $('c_num').value = c.num; $('c_ring0').value = c.ring[0]; $('c_ring1').value = c.ring[1];
+  $('c_acc').value = c.acc; $('c_muted').value = c.muted; $('fx').value = fx; $('c_fx').value = fxc;
+  $('deco').checked = true;
+  update();
+}
+
+// reads the form into the edited theme
+function readForm() {
+  const c = THEMES[EDIT];
+  c.bg = $('c_bg').value; c.num = $('c_num').value; c.ring = [$('c_ring0').value, $('c_ring1').value];
+  c.acc = $('c_acc').value; c.muted = $('c_muted').value;
+  const fx = +$('fx').value, fxc = $('c_fx').value;
+  if (fx === 1) c.fx = { shadow: [fxc, 3, 3] };
+  else if (fx === 2) c.fx = { grad: [c.num, mix(c.num, fxc), fxc] };
+  else c.fx = {};
+  c.useDeco = $('deco').checked;
+}
+
+// SVG of the background exactly as the device stores it: fill, glow, decoration, ring
+function backgroundSvg(withBase = true) {
+  const t = T(), deco = t.deco;
+  if (!t.useDeco) t.deco = null;
+  const ringFnBackup = t.ringFn;
+  let inner = (withBase ? background() : (t.deco ? t.deco() : '')) + gradRing();
+  t.deco = deco; t.ringFn = ringFnBackup;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">${inner}</svg>`;
+}
+
+function svgToImage(svg) {
+  return new Promise((ok, bad) => {
+    const img = new Image();
+    img.onload = () => ok(img);
+    img.onerror = bad;
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  });
+}
+
+// renders the 240x240 background to RGBA
+async function renderBackground() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 240;
+  const g = cv.getContext('2d');
+  if (photo) {
+    g.fillStyle = '#000'; g.fillRect(0, 0, 240, 240);
+    const s = Math.max(240 / photo.width, 240 / photo.height);
+    const w = photo.width * s, h = photo.height * s;
+    g.drawImage(photo, (240 - w) / 2, (240 - h) / 2, w, h);
+    g.fillStyle = `rgba(0,0,0,${$('dark').value / 100})`; g.fillRect(0, 0, 240, 240);
+    g.drawImage(await svgToImage(backgroundSvg(false)), 0, 0);
+  } else {
+    g.drawImage(await svgToImage(backgroundSvg(true)), 0, 0);
+  }
+  return g.getImageData(0, 0, 240, 240).data;
+}
+
+// ================= 256-color quantization (median cut on 15-bit color) =================
+function quantize(rgba) {
+  const N = 240 * 240, key = new Uint16Array(N), hist = new Uint32Array(32768);
+  for (let i = 0; i < N; i++) {
+    const x = i % 240, y = (i / 240) | 0, dx = x - 119.5, dy = y - 119.5;
+    const inside = dx * dx + dy * dy <= 122 * 122;
+    const r = inside ? rgba[i * 4] : 0, g = inside ? rgba[i * 4 + 1] : 0, b = inside ? rgba[i * 4 + 2] : 0;
+    const k = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    key[i] = k; hist[k]++;
+  }
+  const bins = [];
+  for (let k = 0; k < 32768; k++) if (hist[k]) bins.push(k);
+  const ch = (k, c) => (k >> (10 - 5 * c)) & 31;
+  const box = list => {
+    let n = 0, lo = [31, 31, 31], hi = [0, 0, 0];
+    for (const k of list) { n += hist[k]; for (let c = 0; c < 3; c++) { const v = ch(k, c); if (v < lo[c]) lo[c] = v; if (v > hi[c]) hi[c] = v; } }
+    const range = hi.map((h, c) => h - lo[c]), axis = range.indexOf(Math.max(...range));
+    return { list, n, axis, score: n * Math.max(...range) * (list.length > 1 ? 1 : 0) };
+  };
+  const boxes = [box(bins)];
+  while (boxes.length < 256) {
+    let bi = -1, best = 0;
+    boxes.forEach((b, i) => { if (b.score > best) { best = b.score; bi = i; } });
+    if (bi < 0) break;
+    const b = boxes[bi];
+    b.list.sort((p, q) => ch(p, b.axis) - ch(q, b.axis));
+    let acc = 0, cut = 1;
+    for (let i = 0; i < b.list.length - 1; i++) { acc += hist[b.list[i]]; if (acc >= b.n / 2) { cut = i + 1; break; } cut = i + 1; }
+    boxes.splice(bi, 1, box(b.list.slice(0, cut)), box(b.list.slice(cut)));
+  }
+  const pal = boxes.map(b => {
+    let r = 0, g = 0, bl = 0;
+    for (const k of b.list) { const h = hist[k]; r += (ch(k, 0) * 8 + 4) * h; g += (ch(k, 1) * 8 + 4) * h; bl += (ch(k, 2) * 8 + 4) * h; }
+    return [r / b.n, g / b.n, bl / b.n].map(Math.round);
+  });
+  while (pal.length < 256) pal.push([0, 0, 0]);
+  const map = new Int16Array(32768).fill(-1);
+  for (const k of bins) {
+    const r = ch(k, 0) * 8 + 4, g = ch(k, 1) * 8 + 4, b = ch(k, 2) * 8 + 4;
+    let bd = 1e9, bi = 0;
+    for (let i = 0; i < 256; i++) { const p = pal[i], d = (p[0] - r) ** 2 + (p[1] - g) ** 2 + (p[2] - b) ** 2; if (d < bd) { bd = d; bi = i; } }
+    map[k] = bi;
+  }
+  const idx = new Uint8Array(N);
+  for (let i = 0; i < N; i++) idx[i] = map[key[i]];
+  return { pal, idx };
+}
+
+// ================= device record =================
+const rgb565 = c => { const [r, g, b] = typeof c === 'string' ? hex(c) : c; return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); };
+const from565 = v => [((v >> 11) & 31) * 255 / 31, ((v >> 5) & 63) * 255 / 63, (v & 31) * 255 / 31].map(Math.round);
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+const RECORD = 64 + 512 + 57600;
+
+function buildRecord(q) {
+  const t = T(), buf = new ArrayBuffer(RECORD), dv = new DataView(buf), u8 = new Uint8Array(buf);
+  u8.set([0x4D, 0x54, 0x47, 0x54], 0);                    // "MTGT"
+  dv.setUint32(4, RECORD, true);
+  const name = new TextEncoder().encode(($('name').value || 'Tema').slice(0, 19));
+  u8.set(name.slice(0, 19), 12);
+  const cols = [t.num, t.acc, t.acc2 || t.acc, t.muted, t.fill, t.plus, t.minus, ...t.warn];
+  cols.forEach((c, i) => dv.setUint16(32 + i * 2, rgb565(c), true));
+  const fx = t.fx || {};
+  if (fx.shadow) { u8[52] = 1; dv.setInt8(53, fx.shadow[1]); dv.setInt8(54, fx.shadow[2]); dv.setUint16(56, rgb565(fx.shadow[0]), true); }
+  else if (fx.grad) { u8[52] = 2; const g = fx.grad.length === 2 ? [fx.grad[0], mix(fx.grad[0], fx.grad[1]), fx.grad[1]] : fx.grad;
+    g.forEach((c, i) => dv.setUint16(56 + i * 2, rgb565(c), true)); }
+  q.pal.forEach((p, i) => dv.setUint16(64 + i * 2, rgb565(p), true));
+  u8.set(q.idx, 64 + 512);
+  dv.setUint32(8, crc32(u8.subarray(12)), true);
+  return u8;
+}
+
+// ================= preview (what the device draws) =================
+let current = null;                      // { q, record }
+let busyRender = 0;
+
+async function update() {
+  readForm();
+  const ticket = ++busyRender;
+  const rgba = await renderBackground();
+  if (ticket !== busyRender) return;
+  const q = quantize(rgba);
+  current = { q };
+  drawPreview();
+}
+
+function drawPreview() {
+  if (!current) return;
+  const { q } = current, t = T();
+  const cv = $('preview'), g = cv.getContext('2d');
+  const img = new ImageData(240, 240);
+  const pal565 = q.pal.map(p => from565(rgb565(p)));
+  for (let i = 0; i < 57600; i++) { const p = pal565[q.idx[i]]; img.data.set([p[0], p[1], p[2], 255], i * 4); }
+  const tmp = document.createElement('canvas'); tmp.width = tmp.height = 240;
+  tmp.getContext('2d').putImageData(img, 0, 0);
+  g.setTransform(2, 0, 0, 2, 0, 0);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tmp, 0, 0);
+  const life = +$('life').value, s = String(life), color = lifeColor(life), size = s.length <= 2 ? 104 : 72;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = `800 ${size}px "Noto Sans"`;
+  const fx = t.fx || {};
+  if (color === t.num && fx.shadow) { g.fillStyle = fx.shadow[0]; g.fillText(s, 120 + fx.shadow[1], 124 + fx.shadow[2]); }
+  if (color === t.num && fx.grad) {
+    const gr = g.createLinearGradient(0, 84, 0, 160);
+    fx.grad.forEach((c, i) => gr.addColorStop(i / (fx.grad.length - 1), c));
+    g.fillStyle = gr;
+  } else g.fillStyle = color;
+  g.fillText(s, 120, 124);
+  g.font = '700 22px "Noto Sans"'; g.fillStyle = t.plus; g.fillText('+3', 120, 58);
+  g.font = '600 14px "Noto Sans"'; g.fillStyle = t.muted; g.fillText('78%', 120, 200);
+  const [mx, my] = pt(98, 62); g.fillStyle = t.acc; g.beginPath(); g.arc(mx, my, 8, 0, 7); g.fill();
+}
+
+// ================= Bluetooth =================
+const SVC = '4d544700-6c69-6665-2d63-6f756e746572';
+const CTRL = '4d544701-6c69-6665-2d63-6f756e746572';
+const DATA = '4d544702-6c69-6665-2d63-6f756e746572';
+let dev = null, ctrl = null, data = null, info = null, chunk = 180;
+const inbox = [], waiters = [];
+
+function onNotify(e) {
+  const m = new Uint8Array(e.target.value.buffer.slice(0));
+  const w = waiters.findIndex(w => w.match(m));
+  if (w >= 0) { const [x] = waiters.splice(w, 1); clearTimeout(x.timer); x.ok(m); } else inbox.push(m);
+}
+function nextMsg(match, ms = 10000) {
+  const i = inbox.findIndex(match);
+  if (i >= 0) return Promise.resolve(inbox.splice(i, 1)[0]);
+  return new Promise((ok, bad) => {
+    const w = { match, ok };
+    w.timer = setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); bad(new Error('o aparelho não respondeu')); }, ms);
+    waiters.push(w);
+  });
+}
+async function cmd(bytes, ms) {
+  const reply = nextMsg(m => m[0] === bytes[0] || m[0] === 0x7F, ms);
+  await ctrl.writeValue(new Uint8Array(bytes));
+  const r = await reply;
+  if (r[0] === 0x7F) throw new Error('erro ' + r[1]);
+  return r;
+}
+
+function log(text, cls = '') { const l = $('log'); l.textContent = text; l.className = cls; }
+
+async function connect() {
+  try {
+    if (dev && dev.gatt.connected) { dev.gatt.disconnect(); return; }
+    dev = await navigator.bluetooth.requestDevice({ filters: [{ services: [SVC] }, { namePrefix: 'MTG' }], optionalServices: [SVC] });
+    dev.addEventListener('gattserverdisconnected', () => { info = null; renderStatus(); });
+    $('connText').textContent = 'Conectando…';
+    const server = await dev.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    ctrl = await svc.getCharacteristic(CTRL);
+    data = await svc.getCharacteristic(DATA);
+    await ctrl.startNotifications();
+    ctrl.addEventListener('characteristicvaluechanged', onNotify);
+    await refreshInfo();
+  } catch (e) {
+    if (e.name !== 'NotFoundError') log('Falha ao conectar: ' + e.message, 'err');
+    renderStatus();
+  }
+}
+
+async function refreshInfo() {
+  const r = await cmd([0x01]);
+  info = { ver: r[1], slots: r[2], mask: r[3], theme: r[4], builtin: r[5], enabled: !!r[6] };
+  renderStatus();
+}
+
+async function selectTheme(i) {
+  if (!info) return;
+  try { await cmd([0x05, i]); await refreshInfo(); } catch (e) { log(e.message, 'err'); }
+}
+
+async function writeData(bytes) {
+  if (data.writeValueWithoutResponse) await data.writeValueWithoutResponse(bytes);
+  else await data.writeValue(bytes);
+}
+
+async function upload(slot) {
+  if (!info || !current) return;
+  const rec = buildRecord(current.q);
+  const btns = document.querySelectorAll('#slots button, #builtins button');
+  btns.forEach(b => b.disabled = true);
+  try {
+    log('Preparando o espaço ' + (slot + 1) + '…');
+    const size = rec.length;
+    await cmd([0x02, slot, size & 255, (size >> 8) & 255, (size >> 16) & 255, size >>> 24], 20000);
+    let sent = 0, acked = 0;
+    const t0 = performance.now(), WINDOW = 8192;
+    while (acked < size) {
+      while (sent < size && sent - acked < WINDOW) {
+        const part = rec.subarray(sent, Math.min(size, sent + chunk));
+        try { await writeData(part); }
+        catch (e) { if (chunk > 20) { chunk = 20; continue; } throw e; }
+        sent += part.length;
+      }
+      const r = await nextMsg(m => m[0] === 0x03 || m[0] === 0x7F, 10000);
+      if (r[0] === 0x7F) throw new Error('o aparelho recusou os dados (erro ' + r[1] + ')');
+      acked = r[1] | (r[2] << 8) | (r[3] << 16) | (r[4] << 24);
+      $('prog').value = acked / size;
+      log(`Enviando… ${Math.round(acked / 1024)} de ${Math.round(size / 1024)} KB`);
+    }
+    const end = await cmd([0x04], 10000);
+    if (end[1] !== 0) throw new Error('a verificação no aparelho falhou');
+    await cmd([0x05, info.builtin + slot]);
+    await refreshInfo();
+    log(`Tema enviado em ${((performance.now() - t0) / 1000).toFixed(1)} s e aplicado.`, 'ok');
+  } catch (e) {
+    log('Falha no envio: ' + e.message, 'err');
+  } finally {
+    btns.forEach(b => b.disabled = false);
+    renderStatus();
+  }
+}
+
+// ================= UI =================
+function renderStatus() {
+  const on = !!(dev && dev.gatt.connected && info);
+  $('dot').classList.toggle('on', on);
+  $('connText').textContent = on ? `Conectado: ${dev.name || 'MTG Life'}` : 'Desconectado';
+  $('connect').textContent = on ? 'Desconectar' : 'Conectar';
+  const b = $('builtins'); b.innerHTML = '';
+  BUILTIN.forEach((n, i) => {
+    const e = document.createElement('button');
+    e.textContent = n; e.style.background = BUILTIN_COLORS[i]; e.style.color = i ? '#000' : '#fff';
+    e.disabled = !on; e.classList.toggle('cur', on && info.theme === i);
+    e.onclick = () => selectTheme(i); b.append(e);
+  });
+  for (let k = 0; k < 2; k++) {
+    const e = document.createElement('button'), has = on && (info.mask >> k) & 1;
+    e.textContent = 'Espaço ' + (k + 1); e.disabled = !has; e.classList.toggle('cur', on && info.theme === info.builtin + k);
+    e.onclick = () => selectTheme(info.builtin + k); b.append(e);
+  }
+  const s = $('slots'); s.innerHTML = '';
+  for (let k = 0; k < 2; k++) {
+    const e = document.createElement('button'), has = on && (info.mask >> k) & 1;
+    e.className = 'primary';
+    e.innerHTML = `Enviar para o espaço ${k + 1}<small>${on ? (has ? 'substitui o tema atual' : 'vazio') : 'conecte primeiro'}</small>`;
+    e.disabled = !on || !info.enabled; e.onclick = () => upload(k); s.append(e);
+  }
+  if (on && !info.enabled) log('O firmware ficou grande demais e ocupou a área dos temas.', 'err');
+}
+
+function renderPresets() {
+  const p = $('presets'); p.innerHTML = '';
+  presets.forEach(t => {
+    const keep = S.theme; S.theme = THEMES.indexOf(t);
+    const e = document.createElement('button'); e.className = 'preset';
+    e.innerHTML = `<span class="th"><svg viewBox="0 0 240 240">${background()}${gradRing()}${bigNum(33)}</svg></span>${t.name}`;
+    S.theme = keep;
+    e.onclick = () => { document.querySelectorAll('.preset').forEach(x => x.classList.remove('sel')); e.classList.add('sel'); loadPreset(t); };
+    p.append(e);
+  });
+  p.firstChild.classList.add('sel');
+}
+
+if (!navigator.bluetooth) {
+  const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  $('noBle').hidden = false;
+  $('noBle').innerHTML = iOS
+    ? 'O Safari do iPhone não deixa sites usarem Bluetooth. Instale o app gratuito <b>Bluefy</b> na App Store e abra este mesmo endereço nele.'
+    : 'Este navegador não tem Web Bluetooth. Use o Chrome ou o Edge (no Linux pode ser preciso ativar em chrome://flags/#enable-web-bluetooth).';
+  $('connect').disabled = true;
+}
+$('connect').onclick = connect;
+for (const id of ['c_bg', 'c_num', 'c_ring0', 'c_ring1', 'c_acc', 'c_muted', 'fx', 'c_fx', 'deco', 'dark']) $(id).addEventListener('input', update);
+$('life').addEventListener('input', drawPreview);
+$('photo').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) { photo = null; $('darkWrap').hidden = true; update(); return; }
+  const img = new Image();
+  img.onload = () => { photo = img; $('darkWrap').hidden = false; update(); };
+  img.src = URL.createObjectURL(f);
+});
+renderPresets();
+renderStatus();
+document.fonts.ready.then(() => loadPreset(presets[0]));
+</script>
+</body>
+</html>

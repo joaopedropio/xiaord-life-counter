@@ -1,0 +1,236 @@
+// Theme definitions and SVG drawing helpers (shared with the layout mockups).
+// Everything draws in the 240x240 screen space of the GC9A01 round display.
+// ---------- palette helpers ----------
+const hex = c => [1,3,5].map(i => parseInt(c.slice(i,i+2),16));
+const toHex = a => '#' + a.map(v => Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0')).join('');
+const mix = (a, b, t=.5) => { const A=hex(a),B=hex(b); return toHex(A.map((v,i)=>v+(B[i]-v)*t)); };
+// what the GC9A01 actually shows: RGB565
+const q565 = c => { const [r,g,b]=hex(c); return toHex([(r>>3)<<3,(g>>2)<<2,(b>>3)<<3]); };
+
+// ---------- themes ----------
+const BASE = { plus:'#00fc00', minus:'#f80000', warn:['#f8fc00','#f8b400','#f80000'] };
+const MANA = {
+  W:{ name:'Planície', bg:'#13110b', ring:'#807c58', mid:'#c8b882', acc:'#f8f0c0', num:'#fffaf0', muted:'#a29a7c', fill:'#26221a' },
+  U:{ name:'Ilha',     bg:'#040b1a', ring:'#103c80', mid:'#2a6cd0', acc:'#3894f8', num:'#eaf3ff', muted:'#6a88b0', fill:'#0e1a32' },
+  B:{ name:'Pântano',  bg:'#0b0611', ring:'#3a1a52', mid:'#7a3cac', acc:'#b06ae0', num:'#f1e6fa', muted:'#86709a', fill:'#1c1026' },
+  R:{ name:'Montanha', bg:'#130504', ring:'#781408', mid:'#d04018', acc:'#ff5a36', num:'#fff1ea', muted:'#a46c5c', fill:'#2a100c' },
+  G:{ name:'Floresta', bg:'#03100a', ring:'#106428', mid:'#38a048', acc:'#46d866', num:'#ecffee', muted:'#62987a', fill:'#0e2418' },
+};
+const GUILDS = [['Azorius','WU'],['Dimir','UB'],['Rakdos','BR'],['Gruul','RG'],['Selesnya','GW'],
+                ['Orzhov','WB'],['Izzet','UR'],['Golgari','BG'],['Boros','RW'],['Simic','GU']];
+// ---------- creative themes: background decoration, shaped rings, number effects ----------
+const rng = seed => () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const f1 = v => v.toFixed(1);
+function stars(n, seed, colors=['#ffffff','#fff2c0','#cfe0ff']) {
+  const r = rng(seed); let s = '';
+  for (let i = 0; i < n; i++) s += `<circle cx="${f1(r()*240)}" cy="${f1(r()*240)}" r="${(.4+r()*1.1).toFixed(2)}" fill="${colors[i%colors.length]}" opacity="${(.35+r()*.6).toFixed(2)}"/>`;
+  return s;
+}
+const circleS = (r, c, w, op=1) => `<circle cx="120" cy="120" r="${r}" stroke="${c}" stroke-width="${w}" fill="none" opacity="${op}"/>`;
+function diamonds(r, size, c, n=4, off=0) {
+  let s = ''; for (let i = 0; i < n; i++) { const a = off + i*360/n, [x,y] = pt(r,a);
+    s += `<rect x="${f1(x-size/2)}" y="${f1(y-size/2)}" width="${size}" height="${size}" fill="${c}" transform="rotate(45 ${f1(x)} ${f1(y)})"/>`; }
+  return s;
+}
+function gear(cx, cy, r, teeth, c, w=4) {
+  let s = `<circle cx="${cx}" cy="${cy}" r="${r}" stroke="${c}" stroke-width="${w}" fill="none"/><circle cx="${cx}" cy="${cy}" r="${r*.35}" stroke="${c}" stroke-width="${w*.7}" fill="none"/>`;
+  for (let i = 0; i < teeth; i++) s += `<rect x="${cx-3}" y="${cy-r-7}" width="6" height="8" fill="${c}" transform="rotate(${i*360/teeth} ${cx} ${cy})"/>`;
+  return s;
+}
+const blur = (id, sd) => `<filter id="${id}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${sd}"/></filter>`;
+
+const CREATIVE = [
+  { name:'Noite estrelada', hw:'fácil — pontos e linhas', bg:'#060a1e', ring:['#c9a34a','#c9a34a'], acc:'#ffd36a', acc2:'#8fb4ff', num:'#fff6dc', muted:'#7c86b0', fill:'#10173a',
+    fx:{ grad:['#fffaf0','#ffd36a'] },
+    deco: () => { const c = [[40,88],[58,66],[84,56],[80,38],[104,30]];
+      return stars(80, 7) + `<polyline points="${c.map(p=>p.join(',')).join(' ')}" stroke="#8fb4ff" stroke-width=".7" fill="none" opacity=".45"/>` +
+        c.map(([x,y]) => `<circle cx="${x}" cy="${y}" r="1.8" fill="#dfe8ff"/>`).join('') +
+        `<circle cx="184" cy="190" r="13" fill="#e8e0c0" opacity=".85"/><circle cx="190" cy="185" r="12" fill="#060a1e"/>`; },
+    ringFn: () => circleS(108.5,'#c9a34a',1.6) + circleS(104,'#c9a34a',.8,.45) + diamonds(106, 5, '#ffd36a') },
+
+  { name:'Vulcão', hw:'médio — degradê no número', bg:'#120302', ring:['#3a0804','#ff5a10'], acc:'#ff7a1a', acc2:'#ffcc33', num:'#fff3b0', muted:'#b86a48', fill:'#2a0a06',
+    fx:{ grad:['#fff3b0','#ffb020','#ff4a10'] },
+    deco: () => { const r = rng(3); let s = `<defs><radialGradient id="lava" cx=".5" cy="1.08" r=".8"><stop offset="0" stop-color="#ff5a10" stop-opacity=".6"/><stop offset="1" stop-color="#ff5a10" stop-opacity="0"/></radialGradient></defs><rect width="240" height="240" fill="url(#lava)"/>`;
+      for (const x0 of [62, 104, 150, 188]) { let x = x0, y = 240, pts = [`${x},${y}`]; while (y > 168 + r()*24) { y -= 7 + r()*8; x += (r()-.5)*14; pts.push(`${f1(x)},${f1(y)}`); }
+        s += `<polyline points="${pts.join(' ')}" stroke="#ff3a00" stroke-width="4" fill="none" opacity=".3"/><polyline points="${pts.join(' ')}" stroke="#ffb040" stroke-width="1.4" fill="none"/>`; }
+      for (let i = 0; i < 22; i++) s += `<circle cx="${f1(20+r()*200)}" cy="${f1(110+r()*120)}" r="${(.6+r()*1.4).toFixed(2)}" fill="#ffb040" opacity="${(.3+r()*.7).toFixed(2)}"/>`;
+      return s; } },
+
+  { name:'Phyrexia', hw:'fácil — triângulos', bg:'#0a0c0b', ring:['#8a9a92','#8a9a92'], acc:'#c8ffd8', acc2:'#4a8a64', num:'#f0f4f0', muted:'#6e8076', fill:'#141a17',
+    fx:{ shadow:['#2f6a46', 3, 3] },
+    deco: () => circleS(66,'#18211c',7) + `<line x1="120" y1="22" x2="120" y2="218" stroke="#18211c" stroke-width="7"/>`,
+    ringFn: () => { let s = circleS(100,'#4a5a52',1);
+      for (let i = 0; i < 40; i++) { const a = i*9, [x0,y0] = pt(114,a-3.2), [x1,y1] = pt(114,a+3.2), [tx,ty] = pt(i%2?104:100,a);
+        s += `<polygon points="${f1(x0)},${f1(y0)} ${f1(x1)},${f1(y1)} ${f1(tx)},${f1(ty)}" fill="${i%2?'#5e6e66':'#a0b0a8'}"/>`; }
+      return s; } },
+
+  { name:'Terminal', hw:'fácil (o brilho do número é médio)', bg:'#020a03', ring:['#4dff6a','#4dff6a'], acc:'#4dff6a', acc2:'#1f9a33', num:'#4dff6a', muted:'#2f9a40', fill:'#062010',
+    plus:'#4dff6a', minus:'#ff5050', warn:['#d8ff4d','#ffb020','#ff5050'], fx:{ glow:'#4dff6a' },
+    deco: () => { let s = ''; for (let y = 0; y < 240; y += 3) s += `<rect y="${y}" width="240" height="1" fill="#0d2a12" opacity=".7"/>`;
+      return s + `<text x="120" y="34" font-size="11" fill="#2f9a40" text-anchor="middle" font-family="monospace">&gt; hp.exe_</text>`; },
+    ringFn: () => { let s = ''; for (let i = 0; i < 72; i++) { const [x,y] = pt(108.5, i*5); s += `<rect x="${f1(x-1.3)}" y="${f1(y-1.3)}" width="2.6" height="2.6" fill="#4dff6a" opacity="${i%6?.45:1}"/>`; } return s; } },
+
+  { name:'Synthwave', hw:'médio', bg:'#12002a', ring:['#00e5ff','#ff2ea6'], acc:'#00e5ff', acc2:'#ff2ea6', num:'#ffffff', muted:'#b080d0', fill:'#24064a',
+    fx:{ shadow:['#ff2ea6', 3, 3] },
+    deco: () => { let s = `<defs><linearGradient id="sun" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd23a"/><stop offset="1" stop-color="#ff2ea6"/></linearGradient></defs>
+        <circle cx="120" cy="128" r="62" fill="url(#sun)" opacity=".5"/>`;
+      [[140,2],[151,3],[161,4],[170,5],[178,6]].forEach(([y,h]) => s += `<rect x="50" y="${y}" width="140" height="${h}" fill="#12002a"/>`);
+      s += `<rect y="186" width="240" height="54" fill="#12002a"/><line x1="0" y1="186" x2="240" y2="186" stroke="#ff2ea6" stroke-width="1.5"/>`;
+      for (const y of [191, 198, 207, 219, 234]) s += `<line x1="0" y1="${y}" x2="240" y2="${y}" stroke="#ff2ea6" stroke-width="1" opacity=".7"/>`;
+      for (let k = -6; k <= 6; k++) s += `<line x1="${120+k*14}" y1="186" x2="${120+k*58}" y2="240" stroke="#ff2ea6" stroke-width="1" opacity=".7"/>`;
+      return s; } },
+
+  { name:'Vitral', hw:'fácil — fatias e círculos', bg:'#050505', ring:['#c9a34a','#c9a34a'], acc:'#ffd36a', acc2:'#e0a020', num:'#fff8e8', muted:'#e8d8a8', fill:'#141008',
+    deco: () => { const J = ['#b01030','#1a50c0','#18a050','#e0a020','#7a30b0']; let s = '';
+      for (let i = 0; i < 16; i++) { const a0 = i*22.5, a1 = a0 + 22.5, [o0x,o0y] = pt(125,a0), [o1x,o1y] = pt(125,a1), [i1x,i1y] = pt(76,a1), [i0x,i0y] = pt(76,a0);
+        s += `<path d="M${f1(o0x)},${f1(o0y)} A125,125 0 0 1 ${f1(o1x)},${f1(o1y)} L${f1(i1x)},${f1(i1y)} A76,76 0 0 0 ${f1(i0x)},${f1(i0y)} Z" fill="${J[(i*3)%5]}" opacity=".55" stroke="#000" stroke-width="2.5"/>`;
+        const [bx,by] = pt(100, a0 + 11.25); s += `<circle cx="${f1(bx)}" cy="${f1(by)}" r="4" fill="${J[(i*3+2)%5]}" opacity=".8" stroke="#000" stroke-width="1.5"/>`; }
+      return s + `<circle cx="120" cy="120" r="76" fill="#050505" stroke="#c9a34a" stroke-width="2"/>`; },
+    ringFn: () => '' },
+
+  { name:'Grimório', hw:'médio — vinheta radial', bg:'#eadcbc', ring:['#5a3e1e','#5a3e1e'], acc:'#a0201a', acc2:'#5a3e1e', num:'#2a1a0c', muted:'#7a6040', fill:'#ddcca8',
+    plus:'#2a7a2a', minus:'#a0201a', warn:['#8a6a00','#b04a00','#a0201a'], light:true,
+    deco: () => `<defs><radialGradient id="vig"><stop offset=".55" stop-color="#8a6a3a" stop-opacity="0"/><stop offset="1" stop-color="#7a5a2a" stop-opacity=".6"/></radialGradient></defs><rect width="240" height="240" fill="url(#vig)"/>`,
+    ringFn: () => { const R = ['M-2,-3 L2,3 M2,-3 L-2,3','M0,-3 L0,3 M0,-1 L2.5,-3','M-2.5,3 L0,-3 L2.5,3','M0,-3 L0,3 M-2,0 L2,0','M-2,-3 L2,-3 L-2,3 L2,3','M0,-3 L0,3 M0,0 L2.5,2'];
+      let s = circleS(110,'#5a3e1e',2) + circleS(100.5,'#5a3e1e',1);
+      for (let i = 0; i < 24; i++) s += `<path d="${R[(i*5)%6]}" transform="rotate(${i*15} 120 120) translate(120 14.8)" stroke="#5a3e1e" stroke-width="1.1" fill="none"/>`;
+      return s; } },
+
+  { name:'Aurora', hw:'pesado — faixas borradas (pré-calcular)', bg:'#020812', ring:['#1a4a5a','#3dffa0'], acc:'#3dffa0', acc2:'#b06aff', num:'#ffffff', muted:'#6a9aa8', fill:'#0a1a26',
+    fx:{ glow:'#3dffa0' },
+    deco: () => `<defs>${blur('ab', 7)}</defs>` + stars(28, 11) +
+      `<g filter="url(#ab)"><path d="M-10,72 C60,28 120,104 250,46" stroke="#3dffa0" stroke-width="24" fill="none" opacity=".38"/>
+       <path d="M-10,98 C70,58 150,124 250,80" stroke="#20c0c0" stroke-width="16" fill="none" opacity=".28"/>
+       <path d="M-10,50 C80,16 160,72 250,26" stroke="#b06aff" stroke-width="14" fill="none" opacity=".3"/></g>` },
+
+  { name:'Engrenagens', hw:'fácil — retângulos girados', bg:'#120c06', ring:['#b07a3a','#b07a3a'], acc:'#e0a050', acc2:'#c06030', num:'#f3e2c0', muted:'#a08060', fill:'#24180c',
+    fx:{ shadow:['#5a3410', 3, 3] },
+    deco: () => gear(46, 204, 30, 12, '#2c1e10', 5) + gear(204, 38, 20, 9, '#2c1e10', 4),
+    ringFn: () => { let s = circleS(105,'#b07a3a',5) + circleS(99.5,'#5a3a1a',1);
+      for (let i = 0; i < 40; i++) s += `<rect x="116.5" y="5" width="7" height="8" fill="#8a5a2a" transform="rotate(${i*9} 120 120)"/>`;
+      return s; } },
+
+  { name:'Profundezas', hw:'médio — degradê vertical', bg:'#03141e', ring:['#0f6a8a','#03344a'], acc:'#5ff0ff', acc2:'#2a8ac0', num:'#e2fcff', muted:'#5a98a8', fill:'#08283a',
+    deco: () => { const r = rng(5); let s = `<defs><linearGradient id="sea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0c4a66"/><stop offset="1" stop-color="#010810"/></linearGradient></defs><rect width="240" height="240" fill="url(#sea)"/>`;
+      for (const [a,b,c,d] of [[70,95,40,110],[105,125,95,160],[140,160,150,210],[175,190,200,250]]) s += `<polygon points="${a},0 ${b},0 ${d},240 ${c},240" fill="#bff0ff" opacity=".05"/>`;
+      for (let i = 0; i < 16; i++) { const x = i%2 ? 22+r()*40 : 178+r()*40; s += `<circle cx="${f1(x)}" cy="${f1(40+r()*180)}" r="${(1.2+r()*3).toFixed(1)}" stroke="#7fd8f0" stroke-width=".8" fill="none" opacity=".5"/>`; }
+      return s; } },
+
+  { name:'8-bit', hw:'fácil — quadrados (combina com Press Start)', bg:'#0c0c1c', ring:['#ff4a6a','#ff4a6a'], acc:'#ffd23a', acc2:'#ff4a6a', num:'#ffffff', muted:'#8a8ab0', fill:'#1a1a34',
+    fx:{ shadow:['#3a2aff', 4, 4] },
+    deco: () => { let s = ''; for (let x = 6; x < 240; x += 12) for (let y = 6; y < 240; y += 12) s += `<rect x="${x}" y="${y}" width="1.5" height="1.5" fill="#22224a"/>`;
+      const H = ['0110110','1111111','1111111','0111110','0011100','0001000'];
+      H.forEach((row,j) => [...row].forEach((c,i) => { if (c === '1') s += `<rect x="${84+i*2.4}" y="${193+j*2.4}" width="2.4" height="2.4" fill="#ff4a6a"/>`; }));
+      return s; },
+    ringFn: () => { const seen = new Set(); let s = '';
+      for (let a = 0; a < 360; a += 1.5) { const [x,y] = pt(108,a), gx = Math.floor(x/6)*6, gy = Math.floor(y/6)*6, k = gx+','+gy;
+        if (seen.has(k)) continue; seen.add(k); s += `<rect x="${gx}" y="${gy}" width="6" height="6" fill="${(gx/6+gy/6)%2?'#ff4a6a':'#a02040'}"/>`; }
+      return s; } },
+
+  { name:'Vampiro', hw:'fácil — retângulos e círculos', bg:'#0c0204', ring:['#8a1a2a','#8a1a2a'], acc:'#e0203a', acc2:'#8a1a2a', num:'#f2e6e6', muted:'#a07078', fill:'#200810',
+    fx:{ shadow:['#6a0010', 2, 4] },
+    deco: () => { const r = rng(9); let s = `<rect width="240" height="18" fill="#6a0012"/>`;
+      for (let x = 0; x <= 240; x += 13) s += `<circle cx="${x}" cy="18" r="7" fill="#6a0012"/>`;
+      for (const x of [58, 80, 104, 131, 152, 176, 196]) { const w = 5 + r()*5, h = 22 + r()*30; s += `<rect x="${f1(x-w/2)}" y="10" width="${f1(w)}" height="${f1(h)}" rx="${f1(w/2)}" fill="#6a0012"/>`; }
+      return s; },
+    ringFn: () => circleS(110,'#8a1a2a',1.5) + circleS(104,'#8a1a2a',.8,.6) + diamonds(107, 6, '#c0203a', 4, 45) },
+
+  { name:'Halo celestial', hw:'fácil — triângulos', bg:'#fffaf0', ring:['#c9a34a','#c9a34a'], acc:'#d4a020', acc2:'#8a6a20', num:'#3a2a10', muted:'#9a8050', fill:'#f4e8cc',
+    plus:'#2a8a3a', minus:'#b02020', warn:['#8a6a00','#b05000','#b02020'], light:true,
+    deco: () => { let s = ''; for (let i = 0; i < 24; i += 2) { const [x0,y0] = pt(180,i*15), [x1,y1] = pt(180,(i+1)*15); s += `<polygon points="120,120 ${f1(x0)},${f1(y0)} ${f1(x1)},${f1(y1)}" fill="#f3e2b4"/>`; }
+      return s + `<defs><radialGradient id="hc"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient></defs><circle cx="120" cy="120" r="78" fill="url(#hc)"/>`; },
+    ringFn: () => circleS(109,'#c9a34a',2.5) + circleS(103.5,'#c9a34a',.8) + diamonds(106.3, 4, '#c9a34a', 8, 22.5) },
+
+  { name:'Centelha', hw:'médio — espirais', bg:'#0a0614', ring:['#ff9a3a','#9a5aff'], acc:'#ff9a3a', acc2:'#9a5aff', num:'#ffffff', muted:'#9a80b8', fill:'#1a1030',
+    fx:{ glow:'#ff9a3a' },
+    deco: () => { let s = `<defs>${blur('sp', 2.5)}<radialGradient id="core"><stop offset="0" stop-color="#ff9a3a" stop-opacity=".35"/><stop offset="1" stop-color="#9a5aff" stop-opacity="0"/></radialGradient></defs><circle cx="120" cy="120" r="90" fill="url(#core)"/>`;
+      for (const [off,c] of [[0,'#ff9a3a'],[180,'#9a5aff'],[90,'#ff5e8a'],[270,'#5a8aff']]) { const p = [];
+        for (let t = 0; t <= 300; t += 6) { const r = 18 * Math.exp(t/170); if (r > 125) break; p.push(pt(r, off + t).map(f1).join(',')); }
+        s += `<polyline points="${p.join(' ')}" stroke="${c}" stroke-width="3" fill="none" opacity=".5" filter="url(#sp)"/><polyline points="${p.join(' ')}" stroke="${c}" stroke-width=".8" fill="none" opacity=".8"/>`; }
+      return s; } },
+].map(t => ({ group:'Criativos', ...t }));
+
+const THEMES = [
+  { group:'Atuais (2 cores)', name:'Padrão', plain:true, bg:'#000000', ring:['#383c38','#383c38'], acc:'#f8b400', acc2:'#f8b400', num:'#ffffff', muted:'#787c78', fill:'#181c18' },
+  ...['W','U','B','R','G'].map(k => ({ group:'Atuais (2 cores)', name:`${k} (atual)`, bg:'#000000',
+      ring:[{W:'#807c58',U:'#103c80',B:'#582878',R:'#781408',G:'#106428'}[k]].flatMap(c=>[c,c]),
+      acc:{W:'#f8f4c8',U:'#3894f8',B:'#a858d8',R:'#f84430',G:'#38d058'}[k], num:'#ffffff', muted:'#787c78', fill:'#181c18', mana:k })),
+  ...Object.entries(MANA).map(([k,m]) => ({ group:'Mana (fundo tingido)', name:`${m.name} ${k}`, mana:k, bg:m.bg, ring:[m.ring,m.mid],
+      acc:m.acc, acc2:m.mid, num:m.num, muted:m.muted, fill:m.fill })),
+  ...GUILDS.map(([n,[a,b]]) => { const A=MANA[a], B=MANA[b]; return { group:'Guildas (2 manas)', name:`${n} ${a}${b}`, mana:a+b,
+      bg:mix(A.bg,B.bg), glow:[A.mid,B.mid], ring:[A.mid,B.mid], acc:A.acc, acc2:B.acc, num:'#ffffff', muted:mix(A.muted,B.muted), fill:mix(A.fill,B.fill) }; }),
+  { group:'Especiais', name:'Grafite', bg:'#1a1c20', ring:['#3a3e46','#6a707c'], acc:'#e6eaf0', acc2:'#9aa2ae', num:'#ffffff', muted:'#8a909a', fill:'#262a31' },
+  { group:'Especiais', name:'Âmbar retrô', bg:'#0c0700', ring:['#5a3a00','#a06800'], acc:'#ffb000', acc2:'#ff8a00', num:'#ffc23c', muted:'#9a6c1c', fill:'#1e1400',
+    warn:['#fff09a','#ff7a00','#ff3010'] },
+  { group:'Especiais', name:'Neon', bg:'#07031a', glow:['#ff2ea6','#00e5ff'], ring:['#ff2ea6','#00e5ff'], acc:'#00e5ff', acc2:'#ff2ea6', num:'#ffffff', muted:'#8070b8', fill:'#150b32' },
+  { group:'Especiais', name:'Pôr do sol', bg:'#1a0614', glow:['#ff6a3d','#9b3dff'], ring:['#ff7a3d','#9b3dff'], acc:'#ffb347', acc2:'#ff5e8a', num:'#fff4e6', muted:'#b07a8a', fill:'#2c0e22' },
+  { group:'Especiais', name:'Oceano', bg:'#02141a', glow:['#0aa8a8','#1050c0'], ring:['#0a9a9a','#1a58c8'], acc:'#40f0d8', acc2:'#3a8cff', num:'#e8fffc', muted:'#5a98a0', fill:'#082630' },
+  { group:'Especiais', name:'Papel (claro)', bg:'#efe8d8', ring:['#cdbf98','#9c8456'], acc:'#b03a20', acc2:'#3a5a8a', num:'#1c1a16', muted:'#7a7060', fill:'#e2d8c2',
+    plus:'#1a8a2a', minus:'#c01818', warn:['#a07000','#c05000','#c01010'], light:true },
+  { group:'Especiais', name:'Gelo (claro)', bg:'#e6f0f6', ring:['#a8c4d8','#5a88b0'], acc:'#1a64b0', acc2:'#40a0c0', num:'#0e1a26', muted:'#5e7486', fill:'#d4e2ec',
+    plus:'#138a3a', minus:'#c0202a', warn:['#9a7400','#c05a00','#c0202a'], light:true },
+  ...CREATIVE,
+].map(t => ({ ...BASE, acc2:t.acc, ...t }));
+
+const S = { life:33, start:40, bat:78, usb:false, theme:0 };
+const T = () => THEMES[S.theme];
+const border = () => T().plain ? T().muted : T().acc;
+const lifeColor = v => { const w = T().warn; return v <= 0 ? w[2] : v <= 5 ? w[1] : v <= 10 ? w[0] : T().num; };
+const ORANGE = '#f8b400';
+const rad = d => d * Math.PI / 180;
+const pt = (r, a, cx=120, cy=120) => [cx + r*Math.sin(rad(a)), cy - r*Math.cos(rad(a))];   // 0 = top, clockwise
+function arc(r, a0, a1, cx=120, cy=120) {
+  const [x0,y0] = pt(r,a0,cx,cy), [x1,y1] = pt(r,a1,cx,cy);
+  const large = ((a1 - a0 + 360) % 360) > 180 ? 1 : 0;
+  return `M${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`;
+}
+// ring color at angle a: c1 at top, c2 at bottom
+const ringAt = a => mix(T().ring[0], T().ring[1], (1 - Math.cos(rad(a))) / 2);
+// gradient ring drawn as short arcs (same as it would be on the device)
+function gradRing(r=108.5, w=4, a0=0, a1=360, op=1) {
+  if (T().ringFn && a1 - a0 >= 360 && r === 108.5) return T().ringFn();
+  if (T().ring[0] === T().ring[1]) {
+    return a1 - a0 >= 360 ? `<circle cx="120" cy="120" r="${r}" stroke="${T().ring[0]}" stroke-width="${w}" fill="none" opacity="${op}"/>`
+                          : `<path d="${arc(r,a0,a1)}" stroke="${T().ring[0]}" stroke-width="${w}" fill="none" stroke-linecap="round" opacity="${op}"/>`;
+  }
+  let s = ''; const n = Math.max(1, Math.round((a1 - a0) / 10));
+  for (let i = 0; i < n; i++) { const b0 = a0 + (a1-a0)*i/n, b1 = a0 + (a1-a0)*(i+1)/n;
+    s += `<path d="${arc(r, b0, b1 + .6)}" stroke="${ringAt((b0+b1)/2)}" stroke-width="${w}" fill="none" opacity="${op}"/>`; }
+  return s;
+}
+const txt = (s, x, y, size, color, weight=700, extra='') =>
+  `<text x="${x}" y="${y}" font-size="${size}" fill="${color}" font-weight="${weight}" text-anchor="middle" dominant-baseline="central" font-family="Noto Sans" ${extra}>${s}</text>`;
+function background() {
+  const t = T(); let s = `<rect width="240" height="240" fill="${t.bg}"/>`;
+  if (t.glow) s += `<defs><radialGradient id="g${S.theme}a" cx=".5" cy="0" r=".9"><stop offset="0" stop-color="${t.glow[0]}" stop-opacity=".28"/><stop offset="1" stop-color="${t.glow[0]}" stop-opacity="0"/></radialGradient>
+      <radialGradient id="g${S.theme}b" cx=".5" cy="1" r=".9"><stop offset="0" stop-color="${t.glow[1]}" stop-opacity=".28"/><stop offset="1" stop-color="${t.glow[1]}" stop-opacity="0"/></radialGradient></defs>
+      <rect width="240" height="240" fill="url(#g${S.theme}a)"/><rect width="240" height="240" fill="url(#g${S.theme}b)"/>`;
+  if (t.deco) s += t.deco();
+  return s;
+}
+function bigNum(v, cy=120, color=lifeColor(v), maxSize=104) {
+  const s = String(v), size = s.length <= 2 ? maxSize : maxSize * 0.7, y = cy + 3, fx = T().fx || {}, ls = 'letter-spacing="-2"';
+  const normal = color === T().num;           // low-life warning colors win over effects
+  let out = '';
+  if (fx.shadow) out += txt(s, 120 + fx.shadow[1], y + fx.shadow[2], size, fx.shadow[0], 800, ls);
+  if (fx.glow) out += `<defs>${blur('ng' + S.theme, 5)}</defs><g filter="url(#ng${S.theme})" opacity=".9">${txt(s, 120, y, size, normal ? fx.glow : color, 800, ls)}</g>`;
+  let fill = color;
+  if (fx.grad && normal) {
+    const id = 'gr' + S.theme + '_' + cy;
+    out += `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" y1="${cy - 36}" x2="0" y2="${cy + 40}">` +
+      fx.grad.map((c, i) => `<stop offset="${i / (fx.grad.length - 1)}" stop-color="${c}"/>`).join('') + `</linearGradient></defs>`;
+    fill = `url(#${id})`;
+  }
+  return out + txt(s, 120, y, size, fill, 800, ls);
+}
+function bolt(x, y, c='#f8fc00') {
+  if (T().light) c = '#b08000';
+  return `<polygon points="${x+3},${y-7} ${x-4},${y+1} ${x+1},${y+1}" fill="${c}"/><polygon points="${x-1},${y-1} ${x+4},${y-1} ${x-3},${y+7}" fill="${c}"/>`;
+}
+function battery(y=200) {
+  const c = S.bat < 20 && !S.usb ? T().minus : T().muted, s = `${S.bat}%`;
+  return S.usb ? txt(s, 128, y, 14, c, 600) + bolt(106, y) : txt(s, 120, y, 14, c, 600);
+}
+const MARK_A = 62;
+const marker = (a=MARK_A, r=98, c=T().acc) => { const [x,y]=pt(r,a); return `<circle cx="${x}" cy="${y}" r="8" fill="${c}"/>`; };
+const delta = (y=58) => txt('+3', 120, y, 22, T().plus, 700);

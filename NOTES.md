@@ -43,13 +43,32 @@ arquivos da pasta antes de começar.
 arduino-cli compile -b Seeeduino:nrf52:xiaonRF52840 mtg_life_counter
 arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_counter
 ```
+- Preferir `tools/flash.sh` (compila, grava e espera o sketch voltar sem abrir a porta
+  serial nesse meio-tempo; `--log ARQUIVO [s]` grava o log serial depois;
+  `--no-compile` só grava). Ele detecta a placa travada no bootloader e avisa.
 - O upload pela serial reinicia a placa no bootloader sozinho (não precisa de reset
   manual), mesmo se o sketch estiver travado. O usuário precisa estar no grupo
   `dialout`.
+- **Travamento na gravação (só na gravação):** em ~1 de cada 8 uploads (3 em ~25 em
+  2026-11-08, todos depois da bateria ligada) o upload termina com "Device programmed",
+  mas a placa fica no bootloader (USB 2886:0045) e não responde nem a pedidos de
+  controle USB (`EPROTO` ao mexer no DTR). O laço do bootloader atende o USB o tempo
+  todo, então a CPU está travada em algum ponto depois do DFU. Não é a porta serial
+  sendo aberta logo após o upload (travou sem isso). Causa exata não encontrada; o
+  bootloader não roda no uso normal (só em upload ou duplo reset), então o uso não é
+  afetado. **Destravar: um clique no botão reset do XIAO.** Com a chave em ON, tirar o
+  USB não reinicia (a bateria mantém a placa ligada). Teste não feito: repetir uploads
+  com a chave em OFF para ver se a bateria influi. Bootloader instalado: **UF2 Bootloader 0.6.1**
+  (tinyusb 0.10.1; o sketch imprime a versão no boot com `DEBUG`). Atualizar o
+  bootloader é uma possível correção, mas tem risco de deixar a placa sem boot.
 - Alternativa: duplo clique no reset → aparece o drive `XIAO-SENSE` → copiar um
   `.uf2` (gerado com `tools/uf2conv/uf2conv.py -f 0xADA52840` a partir do `.hex`).
 - Log de debug: serial a 115200 (`DEBUG 1` no topo do sketch). O sketch espera até
-  3 s pelo monitor no boot.
+  3 s pelo monitor no boot (só no USB).
+- Comandos de teste pela serial (com `DEBUG`), um por linha: `font N`, `life N`,
+  `menu`, `dice N`, `home`, `bat N` (finge N% de bateria; -1 = real), `ctup N` (tema binário). Permitem testar telas sem tocar no painel.
+- Durante um upload a tela congela ~35 s (a placa está no bootloader): não é travamento.
+  O `flash.sh` fecha o log serial antes de compilar, então o log para ~1 min antes.
 
 ## Arquivos
 - `mtg_life_counter/mtg_life_counter.ino` — sketch principal (a Arduino IDE exige
@@ -64,20 +83,30 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
   **Bolinha laranja** segue o dedo na borda.
 - **Toque à direita do número:** +1. **À esquerda:** -1.
 - **Segurar à direita/esquerda:** +10/-10 após 600 ms, repetindo a cada 600 ms.
-- **Toque bem no centro** (< 30 px): abre o menu (fonte 4, 26 px) — Reiniciar /
-  20 | 40 / Dado | Luz / Voltar (o modo atual tem borda verde; tocar fora não fecha).
-- **Brilho:** Menu → Luz. Funciona como a vida: toque em "-" / "+" = 1%, segurar =
+- **Toque bem no centro** (< 30 px): abre o menu, com ícones em vez de texto:
+  ↻ reiniciar (borda laranja) / 20 | 40 (o modo atual tem borda verde) / dado | sol
+  (brilho) / paleta de 5 cores (tema) | seta para a esquerda (voltar). Tocar fora não
+  fecha. Ícones desenhados em `drawIcon()` (enum `Icon`); um `Btn` tem texto ou ícone.
+- **Tema:** Menu → paleta → padrão (-) ou W/U/B/R/G. Muda a cor do anel, da bolinha e das
+  bordas dos botões (`THEMES[]`).
+- **Brilho:** Menu → sol (título com ícone de sol). Funciona como a vida: toque em "-" / "+" = 1%, segurar =
   10% repetindo, arrastar na borda = 1% a cada 5° (`BRIGHT_STEP_DEG`). Faixa 1–100%.
-  Muda na hora; OK salva. PWM no D6 (`analogWrite`).
-- **Apagar tela:** na mesma tela, o botão abaixo de "apagar tela" alterna nunca /
+  Muda na hora; ✓ salva. PWM no D6 (`analogWrite`).
+- **Apagar tela:** na mesma tela, o botão abaixo da lua alterna nunca (∞) /
   5 s / 10 s / 15 s / 30 s (padrão) / 1 min / 2 min / 5 min (`SLEEP_SECS`). Na flash
   vai o tempo em unidades de 5 s (não o índice), então a lista pode mudar.
   Fora da tela de vida (menu, dado, brilho) o tempo é no mínimo 15 s (`MENU_MIN_SLEEP_S`). Sem toque por esse
   tempo: backlight em 0 + GC9A01 em sleep (0x28, 0x10). O primeiro toque só acorda a
   tela (0x11, 120 ms, 0x29, repinta tudo) e é ignorado, para não mudar a vida sem querer.
-- **Dado:** Menu → Dado → escolher d4, d6, d8, d10, d12 ou d20 (ou Voltar). Faz uma
-  animação curta e mostra o resultado em fonte grande (fonte 7 ×2, ~96 px; verde no
-  máximo, vermelho no 1). Fica na tela até um toque, que volta para a vida. O
+- **Modo bateria baixa:** na bateria com ≤ 20% (`LOW_BAT_ON`), o brilho vai para 1%
+  (`LOW_BAT_BRIGHT`) e a tela apaga após 5 s (`LOW_BAT_SLEEP_S`; nos menus continua o
+  mínimo de 15 s). Não mexe nos valores salvos. Sai com ≥ 25% (`LOW_BAT_OFF`, folga para
+  não ficar alternando) ou com o USB ligado. A % fica vermelha enquanto o modo está ativo.
+  Na tela de brilho o backlight mostra o valor escolhido (para dar para ajustar).
+  Teste pela serial: `bat N` finge N% e ignora o USB; `bat -1` volta à leitura real.
+- **Dado:** Menu → dado → escolher d4, d6, d8, d10, d12 ou d20 (ou a seta de voltar). Faz uma
+  animação curta e mostra o resultado na fonte grande da vida (verde no máximo,
+  vermelho no 1). Fica na tela até um toque, que volta para a vida (a seta embaixo indica isso). O
   `random()` é semeado no boot pelo RNG de hardware (`NRF_RNG`).
 - Não há mais rótulo "Standard"/"Commander" embaixo do número.
 - **Indicador "+3" / "-2"** acima do número, some 2 s após a última mudança.
@@ -89,8 +118,75 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
 - **Boot:** a tela de vida é desenhada logo após `tft.init()` e o backlight só acende
   com ela pronta (sem splash: o boot já é rápido). A espera de até 3 s pelo monitor
   serial vem depois e só acontece no USB (VBUS); na bateria não há espera.
-- **Salvamento:** vida, modo, brilho e tempo de apagar são salvos na flash 3 s após a última mudança (com o
+- **Números grandes / fontes:** 12 fontes anti-aliased (4 bits por pixel), escolhidas em
+  Menu → "Aa": 0 Noto Sans Bold (padrão), 1 Cinzel, 2 Bebas Neue, 3 Orbitron, 4 Bungee,
+  5 Black Ops One, 6 Press Start 2P, 7 Permanent Marker, 8 Righteous, 9 Bangers,
+  10 Creepster, 11 Griffy (Google Fonts, licenças OFL/Apache). Cada uma tem dois
+  tamanhos em `mtg_life_counter/fonts/`: `_xl` (dígitos de até 76 px, cabem 2
+  caracteres) e `_l` (cabem 4, de -999 a 999). `tools/build_fonts.sh` baixa as fontes e
+  gera tudo com `tools/make_bigfont.py` (que acha o maior tamanho que cabe). A ordem
+  no script = `FONTS[]` no sketch = valor salvo. ~30 KB de flash por fonte; o sketch
+  usa ~69% da flash.
+- **Tela de fontes:** número de teste (começa na vida atual, não altera a vida) na
+  fonte candidata; bolinhas mostram a posição; ◀ ▶ trocam na hora, ✓ salva. O número
+  de teste muda como a vida: toque à direita/esquerda dele ±1, segurar ±10, borda.
+- **Salvamento:** vida, fonte, tema, modo, brilho e tempo de apagar são salvos na flash 3 s após a última mudança (com o
   dedo fora da tela) e restaurados no boot.
+
+## Temas pelo site (BLE)
+- **Site:** `docs/index.html` + `docs/themes.js` (editor + Web Bluetooth). Publicado copiando os
+  dois arquivos para `~/joaopedropio.github.io/mtg-life/` → https://joaopedropio.github.io/mtg-life/
+  (os outros projetos do site seguem o mesmo padrão). Chrome/Edge no Android e computador;
+  no iPhone só pelo app **Bluefy** (o Safari não tem Web Bluetooth).
+- **BLE sempre ligado** (Bluefruit / SoftDevice S140), nome "MTG Life", +4 dBm, anúncio a 100 ms
+  nos primeiros 30 s e depois 1 s. Serviço `4d544700-6c69-6665-2d63-6f756e746572`: CTRL
+  (`...4701`, write+notify) e DATA (`...4702`, write without response). Protocolo no
+  comentário "BLE: themes from the web page" no sketch.
+- **Com o SoftDevice ligado a flash é gravada por `sd_flash_*`** (`flashErasePage` /
+  `flashWriteWords` decidem sozinhas). O RNG é lido antes do `bleBegin()`.
+- **Espaços de tema:** 2 espaços de 0xF000 em 0xCF000–0xED000. Registro = cabeçalho de 64 bytes
+  (magic "MTGT", tamanho, CRC-32, nome, cores RGB565, efeito do número) + paleta de 256 cores
+  + 240×240 índices = 58.176 bytes. O fundo já traz anel e decoração; o firmware desenha número,
+  "+3", bateria e bolinha por cima e apaga copiando o fundo da flash (`restoreBg`). Temas 0–5 =
+  embutidos, 6–7 = espaços. Só a tela de vida usa a imagem; menus continuam pretos com a cor de
+  destaque do tema.
+- **O sketch precisa terminar antes de 0xCF000** (hoje ~0xC4000, 79% da flash). Se passar, o
+  `ctInit()` desliga os temas personalizados. O upload pela serial só apaga as páginas do
+  firmware novo, então os temas sobrevivem a gravações (confirmar se mudar o bootloader).
+- Teste sem BLE: comando serial `ctup N` + os 58.176 bytes do registro grava no espaço N.
+- O Bluetooth do PC (Intel AX210 na B550M) recebe tudo a ~-95 dBm e não segura conexão
+  (desconecta com motivo 0x08). Testar BLE pelo celular ou pelo Mac Mini.
+
+## Rodar no Mac (Mac Mini) — ainda não testado lá
+O PC Linux tem Bluetooth ruim (ver "Temas pelo site"); no Mac dá para gravar pelo USB e
+testar o BLE (Chrome e Python/bleak usam o Bluetooth do macOS).
+```
+brew install arduino-cli pipx
+pipx install adafruit-nrfutil
+arduino-cli config init
+arduino-cli config add board_manager.additional_urls https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json
+arduino-cli core update-index
+arduino-cli core install Seeeduino:nrf52@1.1.13
+# bibliotecas (no Linux estavam em ~/Arduino/libraries; no Mac o padrão é ~/Documents/Arduino/libraries)
+git clone https://github.com/Seeed-Studio/Seeed_GFX ~/Documents/Arduino/libraries/Seeed_GFX          # usada: 2.0.3
+git clone https://github.com/Seeed-Studio/Seeed_Arduino_FS ~/Documents/Arduino/libraries/Seeed_Arduino_FS   # usada: 2.1.5
+```
+- No Linux o build pedia um comando `python` (atalho para python3) e o `adafruit-nrfutil` no
+  PATH. Se o compile/upload reclamar de `python` no Mac:
+  `ln -s "$(which python3)" /usr/local/bin/python` (ou um diretório próprio no PATH).
+- Compilar: `arduino-cli compile -b Seeeduino:nrf52:xiaonRF52840 mtg_life_counter`
+- Porta: `ls /dev/cu.usbmodem*` (sem grupo `dialout` no Mac). Gravar:
+  `arduino-cli upload -b Seeeduino:nrf52:xiaonRF52840 -p /dev/cu.usbmodemXXXX mtg_life_counter`
+- **`tools/flash.sh` é só Linux** (usa `lsusb`, `sg dialout`, `/dev/serial/by-id`). No Mac usar os
+  comandos acima, ou adaptar o script (`ioreg`/`system_profiler SPUSBDataType` no lugar do `lsusb`).
+- Log serial: `stty -f /dev/cu.usbmodemXXXX 115200 raw -echo; cat /dev/cu.usbmodemXXXX > log.txt`
+  (em segundo plano). Comandos de teste: `printf 'menu\n' > /dev/cu.usbmodemXXXX`.
+  Upload de tema pelo USB: `printf 'ctup 0\n' > PORTA; sleep 2; cat tema.bin > PORTA`.
+- Site local: `python3 -m http.server -d docs 8000` → http://localhost:8000 no Chrome (localhost
+  conta como seguro, então o Web Bluetooth funciona).
+- Teste BLE em Python: `python3 -m venv .venv && .venv/bin/pip install bleak` e
+  `.venv/bin/python tools/ble_theme_test.py 0 [tema.bin]` (o macOS pede permissão de Bluetooth
+  para o Terminal na primeira vez).
 
 ## Decisões técnicas (e por quê)
 - **Vídeo próprio (framebuffer + DMA):** o caminho da Seeed_GFX no nRF52840 manda
@@ -108,12 +204,14 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
   SCL + STOP + `Wire.begin()`). Timeouts acontecem de vez em quando e são absorvidos.
 - **Filtro de saltos:** leituras com mais de 60° de diferença da anterior são
   ignoradas (`MAX_JUMP_DEG`) — evitavam inversão de sentido no slider.
-- **Salvamento direto na flash (NVMC):** log append-only de registros de 12 bytes
-  de 16 bytes (seq + vida + modo + brilho + apagar + 3 bytes reservados + checksum
-  "MTG2"; 256 registros por página). Registros antigos de 12 bytes não são lidos. em duas páginas: 0xF2000 e 0xF3000 (fim da área
+- **Salvamento direto na flash (NVMC):** log append-only de registros de 16 bytes
+  (seq + vida + modo + brilho + apagar + fonte + 1 byte reservado + tema + checksum
+  "MTG2"; 256 registros por página) em duas páginas: 0xF2000 e 0xF3000 (fim da área
   reservada ao InternalFS, que não é tocada por uploads de firmware). Salvar = 3
   escritas de word (< 1 ms); só apaga a outra página quando a atual enche (256
-  registros, ~85 ms). No boot vale o registro válido de maior seq. Substituiu o
+  registros, ~85 ms). No boot vale o registro válido de maior seq. O byte do tema
+  (só os 4 bits baixos valem) era "reservado" (0xFF) antes: 0xFF vira o tema padrão,
+  então registros antigos continuam valendo. Registros de 12 bytes (versão "MTG1") não são lidos. Substituiu o
   LittleFS, que levava ~640 ms por salvamento.
   **Se o BLE (SoftDevice) for ativado, trocar por `sd_flash_write`/`sd_flash_page_erase`.**
 - Constante do ADC nesse core: `AR_INTERNAL_2_4` (não `AR_INTERNAL2V4`).
@@ -136,14 +234,23 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
   brilho 1–100% (toque/segurar/borda) e apagar tela configurável. Testado pelo
   usuário: dado, brilho, apagar/acordar. Ainda não confirmado na tela: opções
   5 s / 10 s e o mínimo de 15 s fora da tela de vida.
-- O log `battery raw=… mV=… vbus=…` em `batteryPercent()` foi posto para
-  diagnóstico; pode sair quando `DEBUG` for desligado.
+- 2026-11-08 (3ª sessão), gravado e testado pelo usuário: 12 fontes escolhíveis (tela
+  "Aa"), temas de mana, menu com ícones, comandos de teste pela serial,
+  `tools/flash.sh`. O usuário aprovou a tela de fontes como está (sem desenhar + e −;
+  os toques laterais mudam o número de teste). Commitado na 4ª sessão.
+  Contadores de veneno / comandante foram feitos e retirados a pedido do usuário. Log de diagnóstico da bateria removido. `DEBUG` continua
+  ligado enquanto as novidades não forem testadas na tela (só custa a espera de até
+  3 s pelo monitor quando está no USB).
+- 2026-11-08 (4ª sessão), gravado: modo bateria baixa (testado pela serial), BLE + temas
+  personalizados (2 espaços) + site em `docs/` (publicado em joaopedropio.github.io/mtg-life/).
+  Testado: tema enviado pelo site → arquivo → `ctup` pela USB → gravado (sd_flash), CRC ok,
+  aplicado e salvo. **Falta testar:** conexão BLE de verdade (celular/Mac/Bluefy no iPhone),
+  aparência do tema no aparelho (o usuário ainda não confirmou), o tema voltar após religar,
+  e tocar na tela de tema (miniatura do espaço). Mockups de layout/temas em
+  `tools/mockups/layouts.html` (layouts A–F da tela de vida e 1–6 do menu ainda não escolhidos).
 
 ## Ideias para próximos passos
-- Fonte mais bonita para os números (fonte custom em vez da fonte 8 do TFT_eSPI)
-- Temas por cor de mana (W/U/B/R/G)
-- Contador de veneno / dano de comandante
-- Desligar a tela / sleep após inatividade para economizar bateria
 - Case impresso em 3D com acesso à chave liga/desliga e ao USB-C
-- Usar o BLE do nRF52840 para sincronizar vários contadores (ver nota da flash)
 - Desligar `DEBUG` na versão final
+- Escolher layout da tela de vida / menu entre os mockups
+- Mais espaços de tema (comprimir com RLE) ou microSD
