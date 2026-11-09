@@ -195,6 +195,12 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
   `reserved1`): índice + 1, 0 = manter a do aparelho (temas antigos). O aparelho troca `fontIdx` quando
   o tema é escolhido (comando 0x05 do site ou toque na tela de tema), não no boot; dá para mudar
   depois em "Aa". Testado: tema com byte 55 = 10 enviado por BLE (bleak) ao espaço 2 → fonte Bangers.
+- **Layouts no tema:** "Layout da tela" (A–F) e "Layout do menu" (1–6) no editor; vão nos bytes 62 e 63
+  do cabeçalho (antes `reserved2`; índice + 1, 0 = manter) e o aparelho troca junto com a fonte ao
+  escolher o tema (`applyThemeFont`). O site já desenha no fundo o anel do layout (B anel fraco, C
+  tracinhos, D anel aberto, F halo + anel fino), porque com tema personalizado o aparelho não desenha
+  o anel. Prévia do menu com os desenhos de `MENUS` (copiados dos mockups para `docs/themes.js`).
+  Testado: tema com 62 = 3, 63 = 4 enviado por BLE → aparelho foi para C + carrossel.
 - **"Começar do zero"** no site: fundo preto, anel cinza, sem decoração, efeito nem foto.
 - Compressão (RLE ~10× no tema de teste) foi considerada e **o usuário preferiu não fazer**.
 - Scripts de teste pelo Mac (no scratchpad, recriar se precisar): cópia do
@@ -342,6 +348,7 @@ git clone https://github.com/Seeed-Studio/Seeed_Arduino_FS ~/Documents/Arduino/l
   menu, Bluetooth desligado até ligar no aparelho. 659.292 bytes (81%).
 - **v0.2.1 (2026-11-09):** fonte escolhida no site (vai no tema) e botão "Começar do zero" no site.
   (A tag v0.2.0 já tinha sido publicada; mover tag publicada exige force-push, então virou v0.2.1.)
+- **v0.3.0 (2026-11-09):** layouts da tela e do menu escolhidos no site, junto com o tema.
 - O `DEBUG` no repositório fica em **0**. Para desenvolver, mudar para 1 localmente (os comandos de
   teste pela serial e o `tools/flash.sh --log` dependem dele) e voltar para 0 antes de commitar.
 - Gerar uma versão: subir `FW_VERSION`, compilar com `--output-dir build` (pasta ignorada pelo git),

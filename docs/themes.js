@@ -234,3 +234,88 @@ function battery(y=200) {
 const MARK_A = 62;
 const marker = (a=MARK_A, r=98, c=T().acc) => { const [x,y]=pt(r,a); return `<circle cx="${x}" cy="${y}" r="8" fill="${c}"/>`; };
 const delta = (y=58) => txt('+3', 120, y, 22, T().plus, 700);
+
+// ---------- menu drawing (same as tools/mockups/layouts.html; the editor previews the menu) ----------
+// ---------- icons ----------
+function icon(name, cx, cy, c=T().num, scale=1) {
+  let g = '';
+  switch (name) {
+    case 'reset': {
+      const r = 10.5, [ex,ey] = pt(r, 325, cx, cy);
+      const tx = Math.cos(rad(325)), ty = Math.sin(rad(325)), nx = Math.sin(rad(325)), ny = -Math.cos(rad(325));
+      g = `<path d="${arc(r,35,325,cx,cy)}" stroke="${c}" stroke-width="3" fill="none"/>
+           <polygon points="${ex+tx*7},${ey+ty*7} ${ex-tx*2+nx*6},${ey-ty*2+ny*6} ${ex-tx*2-nx*6},${ey-ty*2-ny*6}" fill="${c}"/>`;
+      break; }
+    case 'dice':
+      g = `<rect x="${cx-12}" y="${cy-12}" width="24" height="24" rx="5" stroke="${c}" stroke-width="3" fill="none"/>`;
+      for (const [dx,dy] of [[0,0],[-6,-6],[6,-6],[-6,6],[6,6]]) g += `<circle cx="${cx+dx}" cy="${cy+dy}" r="2" fill="${c}"/>`;
+      break;
+    case 'sun':
+      g = `<circle cx="${cx}" cy="${cy}" r="6" fill="${c}"/>`;
+      for (let i=0;i<8;i++){ const [x0,y0]=pt(9,i*45,cx,cy),[x1,y1]=pt(13,i*45,cx,cy); g+=`<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="${c}" stroke-width="2.5" stroke-linecap="round"/>`; }
+      break;
+    case 'palette': {
+      const M = ['#f8f4c8','#3894f8','#a858d8','#f84430','#38d058'];
+      for (let i=0;i<5;i++){ const [x,y]=pt(9,i*72,cx,cy); g+=`<circle cx="${x}" cy="${y}" r="4" fill="${M[i]}" stroke="${T().light?'#0004':'none'}"/>`; }
+      break; }
+    case 'back':
+      g = `<line x1="${cx-4}" y1="${cy}" x2="${cx+12}" y2="${cy}" stroke="${c}" stroke-width="4"/><polygon points="${cx-13},${cy} ${cx-3},${cy-9} ${cx-3},${cy+9}" fill="${c}"/>`;
+      break;
+    default: g = txt(name, cx, cy+1, 22, c, 700);
+  }
+  return scale === 1 ? g : `<g transform="translate(${cx},${cy}) scale(${scale}) translate(${-cx},${-cy})">${g}</g>`;
+}
+const MENU = [
+  { id:'reset', label:'Reiniciar' }, { id:'Aa', label:'Fonte' }, { id:'20', label:'20 vidas' }, { id:'40', label:'40 vidas' },
+  { id:'dice', label:'Dado' }, { id:'sun', label:'Brilho' }, { id:'palette', label:'Tema' }, { id:'back', label:'Voltar' },
+];
+// borders alternate between the two accents in two-color themes
+const itemBorder = (id, i=0) => id === 'reset' ? (T().light ? '#c05000' : ORANGE) : (id === String(S.start) ? T().plus : (T().plain ? T().muted : (i % 2 ? T().acc2 : T().acc)));
+const rrect = (x,y,w,h,r,stroke,fill=T().fill) => `<rect x="${x+.5}" y="${y+.5}" width="${w-1}" height="${h-1}" rx="${r}" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`;
+const circ = (x,y,r,stroke,w=1.5) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${T().fill}" stroke="${stroke}" stroke-width="${w}"/>`;
+
+// ---------- menu layouts ----------
+const MENUS = [
+  { n:'1', name:'Atual — grade 2×4', desc:'Botões retangulares 66×40.', draw: () => {
+    let s = ''; const pos = [[50,28],[124,28],[50,76],[124,76],[50,124],[124,124],[50,172],[124,172]];
+    MENU.forEach((m,i) => { const [x,y]=pos[i]; s += rrect(x,y,66,40,10,itemBorder(m.id, i)) + icon(m.id, x+33, y+20); });
+    return s; } },
+  { n:'2', name:'Radial', desc:'7 botões redondos num círculo e “voltar” no centro (onde o toque abriu o menu).', draw: () => {
+    let s = `<circle cx="120" cy="120" r="80" stroke="${T().fill}" stroke-width="1.5" fill="none"/>`;
+    MENU.slice(0,7).forEach((m,i) => { const [x,y]=pt(80, i*360/7); s += circ(x,y,25,itemBorder(m.id,i)) + icon(m.id, x, y); });
+    return s + circ(120,120,24,border()) + icon('back',120,120); } },
+  { n:'3', name:'Anel em fatias', desc:'A borda vira 7 fatias grandes e o centro é “voltar”. Fatias pintadas com o degradê do anel.', draw: () => {
+    let s = ''; const n = 7, gap = 2;
+    MENU.slice(0,7).forEach((m,i) => {
+      const mid = i*360/n, a0 = mid - 180/n + gap, a1 = mid + 180/n - gap;
+      const [o0x,o0y]=pt(116,a0),[o1x,o1y]=pt(116,a1),[i1x,i1y]=pt(52,a1),[i0x,i0y]=pt(52,a0);
+      const special = m.id === 'reset' || m.id === String(S.start);
+      const fill = T().plain ? T().fill : mix(T().fill, ringAt(mid), .35);
+      s += `<path d="M${o0x},${o0y} A116,116 0 0 1 ${o1x},${o1y} L${i1x},${i1y} A52,52 0 0 0 ${i0x},${i0y} Z" fill="${fill}" stroke="${special?itemBorder(m.id):mix(T().fill,ringAt(mid),.8)}" stroke-width="1.5" stroke-linejoin="round"/>`;
+      const [x,y]=pt(85, mid); s += icon(m.id, x, y);
+    });
+    return s + circ(120,120,44,border()) + icon('back',120,120); } },
+  { n:'4', name:'Carrossel', desc:'Um item grande por vez, com nome. Gira pela borda (como a vida) ou toca nos vizinhos.', draw: () => {
+    const cur = 4, prev = 3, next = 5;
+    let s = gradRing() + circ(120,108,44,T().acc,2) + icon(MENU[cur].id, 120, 108, T().num, 1.8);
+    s += `<g opacity=".45">${circ(40,108,22,itemBorder(MENU[prev].id))}${icon(MENU[prev].id,40,108)}${circ(200,108,22,itemBorder(MENU[next].id))}${icon(MENU[next].id,200,108)}</g>`;
+    s += txt(MENU[cur].label, 120, 172, 17, T().num, 600);
+    MENU.forEach((m,i) => s += `<circle cx="${120 + (i-3.5)*11}" cy="198" r="${i===cur?3.5:2}" fill="${i===cur?T().acc:T().muted}"/>`);
+    return s + marker(62); } },
+  { n:'5', name:'Grade de círculos', desc:'Círculos 3-3-2 com “voltar” no meio. Reiniciar fica embaixo, longe do toque mais comum.', draw: () => {
+    let s = '';
+    const cells = [[60,60,'Aa'],[120,60,'dice'],[180,60,'sun'],[60,120,'20'],[120,120,'back'],[180,120,'40'],[90,180,'palette'],[150,180,'reset']];
+    cells.forEach(([x,y,m],i) => s += circ(x,y,25,m==='back'?border():itemBorder(m,i)) + icon(m, x, y));
+    return s; } },
+  { n:'6', name:'Lista com nomes', desc:'Lista rolável: a linha do meio em destaque. Rola pela borda; toque na linha do meio escolhe.', draw: () => {
+    const cur = 5; let s = gradRing(108.5, 4, 60, 120);
+    [-2,-1,0,1,2].forEach(o => {
+      const m = MENU[(cur+o+8)%8], y = 120 + o*44, on = o===0, op = on?1:(Math.abs(o)===1?.6:.25);
+      s += `<g opacity="${op}">`;
+      if (on) s += rrect(34, y-21, 172, 42, 12, T().acc);
+      s += icon(m.id, on?62:72, y, T().num, on?1:.8) + `<text x="${on?88:94}" y="${y+1}" font-size="${on?18:15}" fill="${T().num}" font-weight="600" dominant-baseline="central" font-family="Noto Sans">${m.label}</text>`;
+      if (m.id === String(S.start)) s += `<circle cx="${on?190:182}" cy="${y}" r="4" fill="${T().plus}"/>`;
+      s += `</g>`;
+    });
+    return s + marker(90, 98); } },
+];

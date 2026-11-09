@@ -66,7 +66,7 @@ const unsigned long RELEASE_MS = 80; // touch ends after this long with no valid
 const unsigned long SAVE_DELAY_MS = 3000; // save to flash this long after the last change
 const bool  INVERT_DIRECTION = false; // set true if clockwise subtracts on your unit
 const bool  SPI_32MHZ = true;         // set false if the screen shows glitches (falls back to 16 MHz)
-#define FW_VERSION "0.2.1"
+#define FW_VERSION "0.3.0"
 #define DEBUG 0                       // 1 = serial log at 115200 + test commands (development only)
 
 #if DEBUG
@@ -126,7 +126,7 @@ struct CustomTheme {
   int8_t   fxDx, fxDy;                  // shadow offset (clamped to +-3)
   uint8_t  font;                        // 1..FONT_COUNT: font (index + 1) to switch to when chosen; 0 = keep
   uint16_t fxColor[3];                  // shadow color, or gradient top / middle / bottom
-  uint16_t reserved2;
+  uint8_t  lifeLayout, menuLayout;      // 1-based layouts to switch to when chosen; 0 = keep
 };
 static_assert(sizeof(CustomTheme) == 64, "CustomTheme header must be 64 bytes");
 enum { FX_NONE, FX_SHADOW, FX_GRAD };
@@ -612,11 +612,14 @@ uint16_t accentColor() { const CustomTheme *c = activeCustom(); return c ? c->ac
 
 inline uint16_t swap16(uint16_t v) { return (v >> 8) | (v << 8); }
 
-// a custom theme can carry a life-number font (picked on the web page): switch to it
-// when the theme is chosen (not at boot: the saved font wins there)
+// a custom theme can carry a life-number font and layouts (picked on the web page):
+// switch to them when the theme is chosen (not at boot: the saved settings win there)
 void applyThemeFont() {
   const CustomTheme *c = activeCustom();
-  if (c && c->font >= 1 && c->font <= FONT_COUNT) fontIdx = c->font - 1;
+  if (!c) return;
+  if (c->font >= 1 && c->font <= FONT_COUNT) fontIdx = c->font - 1;
+  if (c->lifeLayout >= 1 && c->lifeLayout <= LIFE_LAYOUTS) lifeLayout = c->lifeLayout - 1;
+  if (c->menuLayout >= 1 && c->menuLayout <= MENU_LAYOUTS) menuLayout = c->menuLayout - 1;
 }
 
 // call whenever `theme` changes: loads the custom palette

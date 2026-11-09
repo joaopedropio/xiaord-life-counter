@@ -37,7 +37,8 @@ temas criados no site.
 
 Os temas personalizados são feitos no editor
 **[joaopedropio.github.io/mtg-life](https://joaopedropio.github.io/mtg-life/)**: escolha uma base
-ou comece do zero, mude cores, fonte e efeito do número ou use uma foto de fundo, e envie pelo Bluetooth. O Bluetooth fica
+ou comece do zero, mude cores, fonte e efeito do número, layout da tela e do menu (com prévia dos
+dois) ou use uma foto de fundo, e envie pelo Bluetooth. O Bluetooth fica
 desligado: antes de conectar, ligue no aparelho em **Menu → Tema → ícone do Bluetooth** (ele desliga
 sozinho depois). Funciona no
 Chrome/Edge (Android, Windows, Mac, Linux); no iPhone use o app gratuito **Bluefy**.
@@ -96,7 +97,7 @@ A chave deslizante da borda liga e desliga o aparelho; a bateria carrega pelo US
 
 ## Instalar o firmware
 
-1. Baixe o arquivo **`mtg-life-counter-v0.2.1.uf2`** na
+1. Baixe o arquivo **`mtg-life-counter-v0.3.0.uf2`** na
    [página de download](https://joaopedropio.github.io/mtg-life/#firmware) ou nas
    [releases](https://github.com/joaopedropio/xiaord-life-counter/releases).
 2. Ligue o XIAO no computador pelo USB-C.

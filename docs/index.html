@@ -61,7 +61,10 @@
   .editor { display:grid; grid-template-columns:auto 1fr; gap:18px; align-items:start; }
   @media (max-width:600px) { .editor { grid-template-columns:1fr; justify-items:center; } }
   .screen { width:264px; height:264px; border-radius:50%; overflow:hidden; background:#000; box-shadow:0 0 0 8px #222, 0 0 0 9px #333; }
-  .screen canvas { width:100%; height:100%; display:block; }
+  .screen canvas, .screen svg { width:100%; height:100%; display:block; }
+  .previews { display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .screen.small { width:180px; height:180px; box-shadow:0 0 0 6px #222, 0 0 0 7px #333; }
+  .previews .cap { font-size:12px; color:var(--muted); margin-top:-6px; }
   .fields { display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; width:100%; }
   .fields label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
   .fields label.full { grid-column:1 / -1; }
@@ -120,7 +123,11 @@
       <button id="backToPresets" type="button">↑ Trocar tema</button>
     </div>
     <div class="editor">
-      <div class="screen"><canvas id="preview" width="480" height="480"></canvas></div>
+      <div class="previews">
+        <div class="screen"><canvas id="preview" width="480" height="480"></canvas></div>
+        <div class="screen small"><svg id="menuPreview" viewBox="0 0 240 240"></svg></div>
+        <div class="cap">Menu</div>
+      </div>
       <div class="fields">
         <label class="full">Nome <input type="text" id="name" maxlength="19"></label>
         <label>Fundo <input type="color" id="c_bg"></label>
@@ -133,6 +140,8 @@
           <select id="fx"><option value="0">Nenhum</option><option value="1">Sombra</option><option value="2">Degradê</option></select></label>
         <label>Cor do efeito <input type="color" id="c_fx"></label>
         <label class="full">Fonte do número <select id="font"></select></label>
+        <label>Layout da tela <select id="lifeLayout"></select></label>
+        <label>Layout do menu <select id="menuLayout"></select></label>
         <label class="chk full"><input type="checkbox" id="deco" checked> Decoração do tema</label>
         <label class="full">Imagem de fundo (opcional) <input type="file" id="photo" accept="image/*"></label>
         <label class="full" id="darkWrap" hidden>Escurecer a imagem <input type="range" id="dark" min="0" max="90" value="45"></label>
@@ -151,17 +160,19 @@
   <section class="card" id="firmware">
     <h2>Firmware</h2>
     <div class="row" style="justify-content:space-between">
-      <div><b>v0.2.1</b> <span class="muted">· 9 nov 2026 · XIAO nRF52840 + Round Display</span></div>
-      <a class="btn primary" href="firmware/mtg-life-counter-v0.2.1.uf2" download>Baixar .uf2</a>
+      <div><b>v0.3.0</b> <span class="muted">· 9 nov 2026 · XIAO nRF52840 + Round Display</span></div>
+      <a class="btn primary" href="firmware/mtg-life-counter-v0.3.0.uf2" download>Baixar .uf2</a>
     </div>
     <ol class="steps">
       <li>Ligue o XIAO no computador pelo USB-C.</li>
       <li>Dê dois cliques rápidos no botão de reset. Aparece o drive <b>XIAO-SENSE</b> (ou XIAO-BOOT).</li>
       <li>Arraste o arquivo <b>.uf2</b> para o drive. A placa grava e reinicia sozinha.</li>
     </ol>
-    <p class="muted">Novo na v0.2.1: a fonte escolhida aqui vai junto com o tema. Na v0.2.0: 6 layouts da tela de vida
-      e 6 do menu, fundo do tema atrás do menu e Bluetooth desligado até você ligar no aparelho.
-      Versões anteriores: <a href="firmware/mtg-life-counter-v0.2.0.uf2" download>v0.2.0</a>,
+    <p class="muted">Novo na v0.3.0: o layout da tela e do menu escolhidos aqui vão junto com o tema. Na v0.2.1: a fonte
+      também. Na v0.2.0: 6 layouts da tela de vida e 6 do menu, fundo do tema atrás do menu e Bluetooth
+      desligado até você ligar no aparelho.
+      Versões anteriores: <a href="firmware/mtg-life-counter-v0.2.1.uf2" download>v0.2.1</a>,
+      <a href="firmware/mtg-life-counter-v0.2.0.uf2" download>v0.2.0</a>,
       <a href="firmware/mtg-life-counter-v0.1.0.uf2" download>v0.1.0</a>.</p>
     <p class="muted">Atualizar não apaga a vida salva, as configurações nem os temas enviados.
       Código e instruções em <a href="https://github.com/joaopedropio/xiaord-life-counter">github.com/joaopedropio/xiaord-life-counter</a>.</p>
@@ -202,6 +213,11 @@ const FONTS = [
 ];
 $('font').innerHTML = '<option value="-1">Manter a do aparelho</option>' +
   FONTS.map(([n], i) => `<option value="${i}">${n}</option>`).join('');
+// layouts, same order as the firmware (the theme stores index + 1; 0 = keep the device's)
+const LIFE_LAYOUTS = ['A · Atual', 'B · Anel de vida', 'C · Marcas', 'D · Dicas', 'E · Recentes', 'F · Halo'];
+const MENU_LAYOUTS = ['1 · Grade', '2 · Radial', '3 · Fatias', '4 · Carrossel', '5 · Redondos', '6 · Lista'];
+$('lifeLayout').innerHTML = '<option value="-1">Manter a do aparelho</option>' + LIFE_LAYOUTS.map((n, i) => `<option value="${i}">${n}</option>`).join('');
+$('menuLayout').innerHTML = '<option value="-1">Manter o do aparelho</option>' + MENU_LAYOUTS.map((n, i) => `<option value="${i}">${n}</option>`).join('');
 const fontCss = (i, px) => { const [n, w] = FONTS[i >= 0 ? i : 0]; return `${w} ${px}px "${n}"`; };
 
 function loadPreset(t) {
@@ -232,6 +248,26 @@ function readForm() {
   else c.fx = {};
   c.useDeco = $('deco').checked;
   c.font = +$('font').value;
+  c.lifeLayout = +$('lifeLayout').value;
+  c.menuLayout = +$('menuLayout').value;
+}
+
+// the ring part of the background for a life layout (the device draws the rest on top)
+function ringForLayout(l) {
+  const t = T();
+  switch (l) {
+    case 1: return gradRing(108.5, 4, 0, 360, .45);          // B: dim ring; the device lights the life part
+    case 2: {                                                // C: 24 ticks instead of a ring
+      let s = '';
+      for (let i = 0; i < 24; i++) { const a = i * 15, [x0, y0] = pt(100, a), [x1, y1] = pt(111, a);
+        s += `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="${ringAt(a)}" stroke-width="3" stroke-linecap="round"/>`; }
+      return s; }
+    case 3: return gradRing(108.5, 4, 200, 520);             // D: open at the bottom for the battery
+    case 5: return `<defs><radialGradient id="haloBg"><stop offset="0" stop-color="${t.acc}" stop-opacity=".24"/>` +
+      `<stop offset=".55" stop-color="${t.acc2 || t.acc}" stop-opacity=".08"/><stop offset="1" stop-color="${t.acc2 || t.acc}" stop-opacity="0"/></radialGradient></defs>` +
+      `<circle cx="120" cy="120" r="120" fill="url(#haloBg)"/>` + gradRing(109, 1.2, 0, 360, .6);   // F: halo, thin ring
+    default: return gradRing();                              // A, E
+  }
 }
 
 // SVG of the background exactly as the device stores it: fill, glow, decoration, ring
@@ -239,7 +275,7 @@ function backgroundSvg(withBase = true) {
   const t = T(), deco = t.deco;
   if (!t.useDeco) t.deco = null;
   const ringFnBackup = t.ringFn;
-  let inner = (withBase ? background() : (t.deco ? t.deco() : '')) + gradRing();
+  let inner = (withBase ? background() : (t.deco ? t.deco() : '')) + ringForLayout(t.lifeLayout);
   t.deco = deco; t.ringFn = ringFnBackup;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">${inner}</svg>`;
 }
@@ -332,6 +368,8 @@ function buildRecord(q) {
   const name = new TextEncoder().encode(($('name').value || 'Tema').slice(0, 19));
   u8.set(name.slice(0, 19), 12);
   u8[55] = t.font >= 0 ? t.font + 1 : 0;                  // life-number font (0 = keep the device's)
+  u8[62] = t.lifeLayout >= 0 ? t.lifeLayout + 1 : 0;      // life layout A..F (0 = keep)
+  u8[63] = t.menuLayout >= 0 ? t.menuLayout + 1 : 0;      // menu layout 1..6 (0 = keep)
   const cols = [t.num, t.acc, t.acc2 || t.acc, t.muted, t.fill, t.plus, t.minus, ...t.warn];
   cols.forEach((c, i) => dv.setUint16(32 + i * 2, rgb565(c), true));
   const fx = t.fx || {};
@@ -371,6 +409,16 @@ function drawPreview() {
   g.imageSmoothingEnabled = false;
   g.drawImage(tmp, 0, 0);
   const life = +$('life').value, s = String(life), color = lifeColor(life);
+  const L = t.lifeLayout, numY = L === 4 ? 104 : 120;
+  if (L === 1) {                                            // B: lit part of the ring = life / 40
+    const f = Math.max(0, Math.min(1, life / S.start));
+    g.strokeStyle = color; g.lineWidth = 4;
+    g.beginPath(); g.arc(120, 120, 108.5, -Math.PI / 2, -Math.PI / 2 + f * 2 * Math.PI); g.stroke();
+  }
+  if (L === 3) {                                            // D: faint - and +
+    g.globalAlpha = .45; g.fillStyle = t.minus; g.fillRect(32, 118, 17, 5);
+    g.fillStyle = t.plus; g.fillRect(192, 118, 17, 5); g.fillRect(198, 112, 5, 17); g.globalAlpha = 1;
+  }
   // like tools/make_bigfont.py: digits up to 76 px tall; "88" (XL) or "-888" (L) fits 196 px
   g.textAlign = 'center'; g.textBaseline = 'alphabetic';
   g.font = fontCss(t.font, 100);
@@ -378,7 +426,7 @@ function drawPreview() {
   const fitW = g.measureText(s.length <= 2 ? '88' : '-888').width;
   const size = Math.min(100 * 76 / h8, 100 * 196 / fitW);
   g.font = fontCss(t.font, size);
-  const m = g.measureText('8'), base = 120 + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
+  const m = g.measureText('8'), base = numY + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
   const fx = t.fx || {};
   if (color === t.num && fx.shadow) { g.fillStyle = fx.shadow[0]; g.fillText(s, 120 + fx.shadow[1], base + fx.shadow[2]); }
   if (color === t.num && fx.grad) {
@@ -388,9 +436,32 @@ function drawPreview() {
   } else g.fillStyle = color;
   g.fillText(s, 120, base);
   g.textBaseline = 'middle';
-  g.font = '700 22px "Noto Sans"'; g.fillStyle = t.plus; g.fillText('+3', 120, 58);
-  g.font = '600 14px "Noto Sans"'; g.fillStyle = t.muted; g.fillText('78%', 120, 200);
-  const [mx, my] = pt(98, 62); g.fillStyle = t.acc; g.beginPath(); g.arc(mx, my, 8, 0, 7); g.fill();
+  g.font = '700 22px "Noto Sans"'; g.fillStyle = t.plus; g.fillText('+3', 120, L === 4 ? 44 : 58);
+  g.font = '600 14px "Noto Sans"'; g.fillStyle = t.muted;
+  if (L === 2) {                                            // C: battery as a short arc
+    const a0 = rad(150 - 90), a1 = rad(210 - 90);
+    g.lineWidth = 4; g.lineCap = 'round';
+    g.strokeStyle = t.fill; g.beginPath(); g.arc(120, 120, 88, a0, a1); g.stroke();
+    g.strokeStyle = t.muted; g.beginPath(); g.arc(120, 120, 88, a1 - (a1 - a0) * .78, a1); g.stroke();
+    g.lineCap = 'butt';
+  } else g.fillText('78%', 120, L === 3 ? 214 : L === 4 ? 202 : 200);
+  if (L === 4) {                                            // E: last changes under the number
+    g.fillStyle = t.fill; g.fillRect(64, 151, 112, 2);
+    g.font = '600 15px "Noto Sans"';
+    [['-4', 78, t.minus], ['+2', 120, t.plus], ['-5', 162, t.minus]].forEach(([v, x, c]) => { g.fillStyle = c; g.fillText(v, x, 168); });
+  }
+  if (L !== 2) { const [mx, my] = pt(98, 62); g.fillStyle = t.acc; g.beginPath(); g.arc(mx, my, 8, 0, 7); g.fill(); }
+  drawMenuPreview(tmp);
+}
+
+// the menu as the device draws it: dark buttons, white icons, theme-colored borders,
+// over the theme image (the device can turn the image off)
+function drawMenuPreview(bgCanvas) {
+  const keep = THEMES[EDIT], t = keep;
+  THEMES[EDIT] = { ...t, fill: '#181c18', num: '#ffffff', acc2: t.acc, plus: '#00fc00', plain: false, light: false };
+  const menu = MENUS[t.menuLayout >= 0 ? t.menuLayout : 0].draw();
+  THEMES[EDIT] = keep;
+  $('menuPreview').innerHTML = `<image href="${bgCanvas.toDataURL()}" width="240" height="240"/>${menu}`;
 }
 
 // ================= Bluetooth =================
@@ -626,7 +697,8 @@ if (!navigator.bluetooth) {
   $('connect').disabled = true;
 }
 $('connect').onclick = connect;
-for (const id of ['c_bg', 'c_num', 'c_ring0', 'c_ring1', 'c_acc', 'c_muted', 'fx', 'c_fx', 'deco', 'dark']) $(id).addEventListener('input', update);
+for (const id of ['c_bg', 'c_num', 'c_ring0', 'c_ring1', 'c_acc', 'c_muted', 'fx', 'c_fx', 'deco', 'dark', 'lifeLayout']) $(id).addEventListener('input', update);
+$('menuLayout').addEventListener('input', () => { readForm(); drawPreview(); });
 $('life').addEventListener('input', drawPreview);
 $('font').addEventListener('input', async () => {
   readForm();
