@@ -339,8 +339,9 @@ git clone https://github.com/Seeed-Studio/Seeed_Arduino_FS ~/Documents/Arduino/l
   teste, espera pelo monitor nem contadores de diagnóstico do BLE); `FW_VERSION` no topo do sketch.
   636.824 bytes (78%).
 - **v0.2.0 (2026-11-09):** layouts da tela de vida (A–F) e do menu (1–6), fundo do tema atrás do
-  menu, Bluetooth desligado até ligar no aparelho, fonte escolhida no site (vai no tema) e botão
-  "Começar do zero" no site.
+  menu, Bluetooth desligado até ligar no aparelho. 659.292 bytes (81%).
+- **v0.2.1 (2026-11-09):** fonte escolhida no site (vai no tema) e botão "Começar do zero" no site.
+  (A tag v0.2.0 já tinha sido publicada; mover tag publicada exige force-push, então virou v0.2.1.)
 - O `DEBUG` no repositório fica em **0**. Para desenvolver, mudar para 1 localmente (os comandos de
   teste pela serial e o `tools/flash.sh --log` dependem dele) e voltar para 0 antes de commitar.
 - Gerar uma versão: subir `FW_VERSION`, compilar com `--output-dir build` (pasta ignorada pelo git),

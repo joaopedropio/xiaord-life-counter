@@ -96,7 +96,7 @@ A chave deslizante da borda liga e desliga o aparelho; a bateria carrega pelo US
 
 ## Instalar o firmware
 
-1. Baixe o arquivo **`mtg-life-counter-v0.2.0.uf2`** na
+1. Baixe o arquivo **`mtg-life-counter-v0.2.1.uf2`** na
    [página de download](https://joaopedropio.github.io/mtg-life/#firmware) ou nas
    [releases](https://github.com/joaopedropio/xiaord-life-counter/releases).
 2. Ligue o XIAO no computador pelo USB-C.

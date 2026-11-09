@@ -66,7 +66,7 @@ const unsigned long RELEASE_MS = 80; // touch ends after this long with no valid
 const unsigned long SAVE_DELAY_MS = 3000; // save to flash this long after the last change
 const bool  INVERT_DIRECTION = false; // set true if clockwise subtracts on your unit
 const bool  SPI_32MHZ = true;         // set false if the screen shows glitches (falls back to 16 MHz)
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.2.1"
 #define DEBUG 0                       // 1 = serial log at 115200 + test commands (development only)
 
 #if DEBUG
