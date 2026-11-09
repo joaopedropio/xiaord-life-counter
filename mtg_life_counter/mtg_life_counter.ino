@@ -124,7 +124,7 @@ struct CustomTheme {
   uint16_t num, acc, acc2, muted, fill, plus, minus, warn[3];   // RGB565
   uint8_t  fx;                          // FX_NONE / FX_SHADOW / FX_GRAD (on the life number)
   int8_t   fxDx, fxDy;                  // shadow offset (clamped to +-3)
-  uint8_t  reserved1;
+  uint8_t  font;                        // 1..FONT_COUNT: font (index + 1) to switch to when chosen; 0 = keep
   uint16_t fxColor[3];                  // shadow color, or gradient top / middle / bottom
   uint16_t reserved2;
 };
@@ -611,6 +611,13 @@ uint16_t ringColor()   { const CustomTheme *c = activeCustom(); return c ? c->ac
 uint16_t accentColor() { const CustomTheme *c = activeCustom(); return c ? c->acc : THEMES[theme].accent; }
 
 inline uint16_t swap16(uint16_t v) { return (v >> 8) | (v << 8); }
+
+// a custom theme can carry a life-number font (picked on the web page): switch to it
+// when the theme is chosen (not at boot: the saved font wins there)
+void applyThemeFont() {
+  const CustomTheme *c = activeCustom();
+  if (c && c->font >= 1 && c->font <= FONT_COUNT) fontIdx = c->font - 1;
+}
 
 // call whenever `theme` changes: loads the custom palette
 void themeChanged() {
@@ -1757,7 +1764,7 @@ void onThemeTap(int x, int y) {
   if (i == THEME_LAYOUT) { drawLayoutPicker(); return; }
   if (i == THEME_BT) { bleOn(); drawBleScreen(); return; }
   if (i >= THEME_COUNT && i < THEME_COUNT + CT_SLOTS && !ctValid[i - THEME_COUNT]) return;  // empty slot
-  if (i < THEME_COUNT + CT_SLOTS && i != theme) { theme = i; themeChanged(); requestSave(); }
+  if (i < THEME_COUNT + CT_SLOTS && i != theme) { theme = i; themeChanged(); applyThemeFont(); requestSave(); }
   closeMenu();
 }
 
@@ -2085,6 +2092,7 @@ void bleCommand(const uint8_t *c, int n) {
       if (ok) {
         theme = t;
         themeChanged();
+        applyThemeFont();
         requestSave();
         showThemeNow();
         DBG("ble theme %d", theme);

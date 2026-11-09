@@ -13,6 +13,8 @@
 <meta name="theme-color" content="#0e0f11">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+<!-- the 12 life-number fonts the device has (tools/build_fonts.sh) -->
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Bebas+Neue&family=Black+Ops+One&family=Bungee&family=Cinzel:wght@700&family=Creepster&family=Griffy&family=Orbitron:wght@700&family=Permanent+Marker&family=Press+Start+2P&family=Righteous&display=swap" rel="stylesheet">
 <style>
   :root { --bg:#0e0f11; --card:#17191c; --card2:#1f2226; --text:#ecebe8; --muted:#9097a0; --line:#2b2f34; --acc:#f8b400; --ok:#3ccf6a; --err:#ff5a5a; }
   * { box-sizing:border-box; }
@@ -103,8 +105,11 @@
   </section>
 
   <section class="card" id="presetsCard">
-    <h2>Criar tema</h2>
-    <p class="muted">Escolha uma base e ajuste. A prévia mostra exatamente as 256 cores que vão para a tela.</p>
+    <div class="edit-head" style="margin-bottom:6px">
+      <h2>Criar tema</h2>
+      <button id="blank" type="button">+ Começar do zero</button>
+    </div>
+    <p class="muted">Escolha uma base e ajuste, ou comece do zero. A prévia mostra exatamente as 256 cores que vão para a tela.</p>
     <div class="tabs" id="tabs" role="tablist" aria-label="Categorias de tema"></div>
     <div id="presets" role="tabpanel"></div>
   </section>
@@ -127,6 +132,7 @@
         <label>Efeito no número
           <select id="fx"><option value="0">Nenhum</option><option value="1">Sombra</option><option value="2">Degradê</option></select></label>
         <label>Cor do efeito <input type="color" id="c_fx"></label>
+        <label class="full">Fonte do número <select id="font"></select></label>
         <label class="chk full"><input type="checkbox" id="deco" checked> Decoração do tema</label>
         <label class="full">Imagem de fundo (opcional) <input type="file" id="photo" accept="image/*"></label>
         <label class="full" id="darkWrap" hidden>Escurecer a imagem <input type="range" id="dark" min="0" max="90" value="45"></label>
@@ -153,8 +159,8 @@
       <li>Dê dois cliques rápidos no botão de reset. Aparece o drive <b>XIAO-SENSE</b> (ou XIAO-BOOT).</li>
       <li>Arraste o arquivo <b>.uf2</b> para o drive. A placa grava e reinicia sozinha.</li>
     </ol>
-    <p class="muted">Novo na v0.2.0: 6 layouts da tela de vida e 6 do menu, fundo do tema atrás do menu e
-      Bluetooth desligado até você ligar no aparelho.
+    <p class="muted">Novo na v0.2.0: 6 layouts da tela de vida e 6 do menu, fundo do tema atrás do menu,
+      Bluetooth desligado até você ligar no aparelho e fonte escolhida aqui no tema.
       <a href="firmware/mtg-life-counter-v0.1.0.uf2" download>v0.1.0</a> ainda disponível.</p>
     <p class="muted">Atualizar não apaga a vida salva, as configurações nem os temas enviados.
       Código e instruções em <a href="https://github.com/joaopedropio/xiaord-life-counter">github.com/joaopedropio/xiaord-life-counter</a>.</p>
@@ -188,6 +194,15 @@ const EDIT = THEMES.length;              // the edited copy lives at the end of 
 let photo = null;                        // HTMLImageElement or null
 const $ = id => document.getElementById(id);
 
+// same order as FONTS[] in the firmware (the theme stores index + 1; 0 = keep the device's font)
+const FONTS = [
+  ['Noto Sans', 700], ['Cinzel', 700], ['Bebas Neue', 400], ['Orbitron', 700], ['Bungee', 400], ['Black Ops One', 400],
+  ['Press Start 2P', 400], ['Permanent Marker', 400], ['Righteous', 400], ['Bangers', 400], ['Creepster', 400], ['Griffy', 400],
+];
+$('font').innerHTML = '<option value="-1">Manter a do aparelho</option>' +
+  FONTS.map(([n], i) => `<option value="${i}">${n}</option>`).join('');
+const fontCss = (i, px) => { const [n, w] = FONTS[i >= 0 ? i : 0]; return `${w} ${px}px "${n}"`; };
+
 function loadPreset(t) {
   const c = { ...t, ring: [...t.ring], warn: [...t.warn], fx: t.fx ? { ...t.fx } : {} };
   let fx = 0, fxc = t.acc2 || t.acc;
@@ -201,6 +216,7 @@ function loadPreset(t) {
   $('c_bg').value = c.bg; $('c_num').value = c.num; $('c_ring0').value = c.ring[0]; $('c_ring1').value = c.ring[1];
   $('c_acc').value = c.acc; $('c_muted').value = c.muted; $('fx').value = fx; $('c_fx').value = fxc;
   $('deco').checked = true;
+  $('deco').parentElement.hidden = !t.deco;   // nothing to toggle on a plain theme
   update();
 }
 
@@ -214,6 +230,7 @@ function readForm() {
   else if (fx === 2) c.fx = { grad: [c.num, mix(c.num, fxc), fxc] };
   else c.fx = {};
   c.useDeco = $('deco').checked;
+  c.font = +$('font').value;
 }
 
 // SVG of the background exactly as the device stores it: fill, glow, decoration, ring
@@ -313,6 +330,7 @@ function buildRecord(q) {
   dv.setUint32(4, RECORD, true);
   const name = new TextEncoder().encode(($('name').value || 'Tema').slice(0, 19));
   u8.set(name.slice(0, 19), 12);
+  u8[55] = t.font >= 0 ? t.font + 1 : 0;                  // life-number font (0 = keep the device's)
   const cols = [t.num, t.acc, t.acc2 || t.acc, t.muted, t.fill, t.plus, t.minus, ...t.warn];
   cols.forEach((c, i) => dv.setUint16(32 + i * 2, rgb565(c), true));
   const fx = t.fx || {};
@@ -351,17 +369,24 @@ function drawPreview() {
   g.setTransform(2, 0, 0, 2, 0, 0);
   g.imageSmoothingEnabled = false;
   g.drawImage(tmp, 0, 0);
-  const life = +$('life').value, s = String(life), color = lifeColor(life), size = s.length <= 2 ? 104 : 72;
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = `800 ${size}px "Noto Sans"`;
+  const life = +$('life').value, s = String(life), color = lifeColor(life);
+  // like tools/make_bigfont.py: digits up to 76 px tall; "88" (XL) or "-888" (L) fits 196 px
+  g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  g.font = fontCss(t.font, 100);
+  const m8 = g.measureText('8'), h8 = m8.actualBoundingBoxAscent + m8.actualBoundingBoxDescent;
+  const fitW = g.measureText(s.length <= 2 ? '88' : '-888').width;
+  const size = Math.min(100 * 76 / h8, 100 * 196 / fitW);
+  g.font = fontCss(t.font, size);
+  const m = g.measureText('8'), base = 120 + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
   const fx = t.fx || {};
-  if (color === t.num && fx.shadow) { g.fillStyle = fx.shadow[0]; g.fillText(s, 120 + fx.shadow[1], 124 + fx.shadow[2]); }
+  if (color === t.num && fx.shadow) { g.fillStyle = fx.shadow[0]; g.fillText(s, 120 + fx.shadow[1], base + fx.shadow[2]); }
   if (color === t.num && fx.grad) {
     const gr = g.createLinearGradient(0, 84, 0, 160);
     fx.grad.forEach((c, i) => gr.addColorStop(i / (fx.grad.length - 1), c));
     g.fillStyle = gr;
   } else g.fillStyle = color;
-  g.fillText(s, 120, 124);
+  g.fillText(s, 120, base);
+  g.textBaseline = 'middle';
   g.font = '700 22px "Noto Sans"'; g.fillStyle = t.plus; g.fillText('+3', 120, 58);
   g.font = '600 14px "Noto Sans"'; g.fillStyle = t.muted; g.fillText('78%', 120, 200);
   const [mx, my] = pt(98, 62); g.fillStyle = t.acc; g.beginPath(); g.arc(mx, my, 8, 0, 7); g.fill();
@@ -540,6 +565,22 @@ function renderTabs() {
   });
 }
 
+// "Começar do zero": black background, plain grey ring, no decoration, effect or photo
+const BLANK = { ...BASE, group: '', name: 'Novo tema', bg: '#000000', ring: ['#3a3a3a', '#3a3a3a'],
+  acc: '#f8b400', acc2: '#f8b400', num: '#ffffff', muted: '#808080', fill: '#1a1a1a' };
+$('blank').onclick = () => {
+  document.querySelectorAll('.preset').forEach(x => x.classList.remove('sel'));
+  curPreset = null;
+  photo = null;
+  $('photo').value = '';
+  $('darkWrap').hidden = true;
+  loadPreset(BLANK);
+  $('name').value = '';
+  $('editName').textContent = 'Novo tema';
+  focusCard('editorCard');
+  $('name').focus({ preventScroll: true });
+};
+
 function presetButton(t) {
   const keep = S.theme; S.theme = THEMES.indexOf(t);
   const e = document.createElement('button'); e.type = 'button';
@@ -586,6 +627,11 @@ if (!navigator.bluetooth) {
 $('connect').onclick = connect;
 for (const id of ['c_bg', 'c_num', 'c_ring0', 'c_ring1', 'c_acc', 'c_muted', 'fx', 'c_fx', 'deco', 'dark']) $(id).addEventListener('input', update);
 $('life').addEventListener('input', drawPreview);
+$('font').addEventListener('input', async () => {
+  readForm();
+  try { await document.fonts.load(fontCss(+$('font').value, 100), '-0123456789'); } catch (e) {}
+  drawPreview();
+});
 $('photo').addEventListener('change', e => {
   const f = e.target.files[0];
   if (!f) { photo = null; $('darkWrap').hidden = true; update(); return; }

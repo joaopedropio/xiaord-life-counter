@@ -190,6 +190,12 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
   PHY 2M pedido na conexão; e cada página do espaço é **apagada só quando os dados dela chegam**
   (antes o BEGIN apagava tudo em ~2,7 s). Se o envio parar antes da 1ª página, o tema antigo
   continua válido. O log do END mostra o tempo do envio e o intervalo aplicado.
+- **Fonte no tema:** o editor tem "Fonte do número" (as 12 do aparelho, carregadas do Google Fonts para
+  a prévia, tamanho calculado como no `make_bigfont.py`). Vai no byte 55 do cabeçalho (`font`, antes
+  `reserved1`): índice + 1, 0 = manter a do aparelho (temas antigos). O aparelho troca `fontIdx` quando
+  o tema é escolhido (comando 0x05 do site ou toque na tela de tema), não no boot; dá para mudar
+  depois em "Aa". Testado: tema com byte 55 = 10 enviado por BLE (bleak) ao espaço 2 → fonte Bangers.
+- **"Começar do zero"** no site: fundo preto, anel cinza, sem decoração, efeito nem foto.
 - Compressão (RLE ~10× no tema de teste) foi considerada e **o usuário preferiu não fazer**.
 - Scripts de teste pelo Mac (no scratchpad, recriar se precisar): cópia do
   `tools/ble_theme_test.py` com `write_gatt_char(CTRL, b"\x06" + parte, response=True)` e
@@ -333,7 +339,8 @@ git clone https://github.com/Seeed-Studio/Seeed_Arduino_FS ~/Documents/Arduino/l
   teste, espera pelo monitor nem contadores de diagnóstico do BLE); `FW_VERSION` no topo do sketch.
   636.824 bytes (78%).
 - **v0.2.0 (2026-11-09):** layouts da tela de vida (A–F) e do menu (1–6), fundo do tema atrás do
-  menu, Bluetooth desligado até ligar no aparelho. 659.292 bytes (81%).
+  menu, Bluetooth desligado até ligar no aparelho, fonte escolhida no site (vai no tema) e botão
+  "Começar do zero" no site.
 - O `DEBUG` no repositório fica em **0**. Para desenvolver, mudar para 1 localmente (os comandos de
   teste pela serial e o `tools/flash.sh --log` dependem dele) e voltar para 0 antes de commitar.
 - Gerar uma versão: subir `FW_VERSION`, compilar com `--output-dir build` (pasta ignorada pelo git),

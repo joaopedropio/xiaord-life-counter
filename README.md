@@ -36,8 +36,8 @@ temas criados no site.
 </p>
 
 Os temas personalizados são feitos no editor
-**[joaopedropio.github.io/mtg-life](https://joaopedropio.github.io/mtg-life/)**: escolha uma base,
-mude cores, efeito do número ou use uma foto de fundo, e envie pelo Bluetooth. O Bluetooth fica
+**[joaopedropio.github.io/mtg-life](https://joaopedropio.github.io/mtg-life/)**: escolha uma base
+ou comece do zero, mude cores, fonte e efeito do número ou use uma foto de fundo, e envie pelo Bluetooth. O Bluetooth fica
 desligado: antes de conectar, ligue no aparelho em **Menu → Tema → ícone do Bluetooth** (ele desliga
 sozinho depois). Funciona no
 Chrome/Edge (Android, Windows, Mac, Linux); no iPhone use o app gratuito **Bluefy**.
