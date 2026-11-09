@@ -141,7 +141,18 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
 - **BLE sempre ligado** (Bluefruit / SoftDevice S140), nome "MTG Life", +4 dBm, anúncio a 100 ms
   nos primeiros 30 s e depois 1 s. Serviço `4d544700-6c69-6665-2d63-6f756e746572`: CTRL
   (`...4701`, write+notify) e DATA (`...4702`, write without response). Protocolo no
-  comentário "BLE: themes from the web page" no sketch.
+  comentário "BLE: themes from the web page" no sketch. **Protocolo v2:** o INFO traz o MTU
+  atual no byte 7, e os dados também podem vir pelo CTRL como `06 + bytes` (CTRL aceita até
+  244 bytes).
+- **iPhone/Bluefy:** o Bluefy **nunca entrega escritas na característica DATA** (sem resposta
+  elas "resolvem" e somem; com resposta rejeitam com um erro sem mensagem), mas o CTRL funciona.
+  Por isso o site, no iOS, manda os dados pelo CTRL (`06 + dados`, com resposta, 243 bytes):
+  ~18–20 s por tema. Nos outros navegadores continua o DATA sem resposta (~5 s); se a primeira
+  página não for confirmada, o site recomeça uma vez no modo lento. O MTU no iPhone também é 247
+  (na conexão o firmware sempre vê 23; ele sobe logo depois).
+- Diagnóstico no log (`DEBUG`): MTU e intervalo na conexão, bytes/escritas recebidos ao
+  desconectar e `rx=bytes/escritas up=estado written=` na linha "alive".
+- Ideia para acelerar: pedir intervalo de conexão menor (hoje 30 ms; iOS aceita 15 ms).
 - **Com o SoftDevice ligado a flash é gravada por `sd_flash_*`** (`flashErasePage` /
   `flashWriteWords` decidem sozinhas). O RNG é lido antes do `bleBegin()`.
 - **Espaços de tema:** 2 espaços de 0xF000 em 0xCF000–0xED000. Registro = cabeçalho de 64 bytes
@@ -157,7 +168,17 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
 - O Bluetooth do PC (Intel AX210 na B550M) recebe tudo a ~-95 dBm e não segura conexão
   (desconecta com motivo 0x08). Testar BLE pelo celular ou pelo Mac Mini.
 
-## Rodar no Mac (Mac Mini) — ainda não testado lá
+## Rodar no Mac (Mac Mini) — ambiente montado e compilando (2026-11-08, 5ª sessão)
+- Mac Mini é Apple Silicon: o `arm-none-eabi-gcc` do pacote Seeed é x86_64 → precisa do
+  **Rosetta** (`softwareupdate --install-rosetta --agree-to-license`; já instalado).
+- O atalho `python` **não pode ser symlink** para `/usr/bin/python3` (é um stub do Xcode que
+  falha com "Failed to locate 'python'"). Usar um script: `#!/bin/sh` + `exec /usr/bin/python3 "$@"`.
+- Instalado: arduino-cli, pipx, adafruit-nrfutil, Seeeduino:nrf52 1.1.13, Seeed_GFX 2.0.3,
+  Seeed_Arduino_FS 2.1.5. Compila igual ao Linux (642.676 bytes, 79%). Porta: `/dev/cu.usbmodem21101`.
+- Na primeira vez o macOS pede permissão de Bluetooth para o terminal e a instalação do
+  Command Line Tools (pedida pelo `/usr/bin/python3`); antes disso o scan do bleak fica parado.
+- **BLE testado pelo Mac (bleak):** conecta, MTU 247, tema de 58.176 bytes no espaço 1 em 5,0 s
+  (11,3 KB/s; apagar o espaço leva 2,7 s), CRC ok, selecionado e salvo.
 O PC Linux tem Bluetooth ruim (ver "Temas pelo site"); no Mac dá para gravar pelo USB e
 testar o BLE (Chrome e Python/bleak usam o Bluetooth do macOS).
 ```
@@ -248,6 +269,17 @@ git clone https://github.com/Seeed-Studio/Seeed_Arduino_FS ~/Documents/Arduino/l
   aparência do tema no aparelho (o usuário ainda não confirmou), o tema voltar após religar,
   e tocar na tela de tema (miniatura do espaço). Mockups de layout/temas em
   `tools/mockups/layouts.html` (layouts A–F da tela de vida e 1–6 do menu ainda não escolhidos).
+
+- 2026-11-08 (5ª sessão), no Mac Mini: ambiente montado (ver "Rodar no Mac"). **Testado e
+  aprovado pelo usuário:** tema enviado por BLE de verdade (bleak), aparência no aparelho, tema
+  volta depois de desligar e religar na bateria, miniaturas e troca na tela de tema.
+  **Site testado no Chrome do Mac** (localhost, Web Bluetooth): conectou e enviou o tema
+  "Papel (claro)" em 2,8 s, aplicado. Funciona também no Chrome do Android. **iPhone (Bluefy)**
+  funcionou depois do protocolo v2 (dados pelo CTRL; ver "Temas pelo site").
+  Site: temas em abas (Elaborados / Magic: cores de mana e guildas / Simples); clicar num tema
+  rola até o editor ("Editando: nome", botão "↑ Trocar tema").
+  Página na raiz do GitHub Pages (`~/joaopedropio.github.io/index.html`, visual do
+  joaopedropio.dev branch `main`, fontes Geist em `assets/fonts/`) com um card por página.
 
 ## Ideias para próximos passos
 - Case impresso em 3D com acesso à chave liga/desliga e ao USB-C

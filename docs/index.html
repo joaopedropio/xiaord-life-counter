@@ -42,6 +42,20 @@
   .preset .th { width:72px; height:72px; border-radius:50%; overflow:hidden; box-shadow:0 0 0 2px #2a2d31; }
   .preset .th svg { width:100%; height:100%; display:block; }
   .preset.sel .th { box-shadow:0 0 0 3px var(--acc); }
+  .tabs { display:flex; gap:4px; padding:4px; margin:4px 0 14px; background:var(--card2); border:1px solid var(--line); border-radius:12px; }
+  .tabs button { flex:1; min-width:0; padding:8px 6px; border:none; border-radius:9px; background:none; color:var(--muted); font-size:14px; }
+  .tabs button[aria-selected=true] { background:var(--acc); color:#1a1300; }
+  .tabs button span { font-weight:400; opacity:.7; font-size:12px; }
+  .cat-note { margin:0 0 12px; }
+  .cat-sub { margin:16px 0 8px; font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  .cat-sub:first-of-type { margin-top:4px; }
+  .edit-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px; }
+  .edit-head h2 { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .edit-head h2 span { color:var(--muted); font-weight:500; }
+  .edit-head button { flex:none; padding:7px 12px; font-size:13px; }
+  #presetsCard, #editorCard { scroll-margin-top:12px; }
+  @keyframes flash { from { box-shadow:0 0 0 2px var(--acc); } to { box-shadow:0 0 0 2px transparent; } }
+  .card.flash { animation:flash 1.2s ease-out; }
   .editor { display:grid; grid-template-columns:auto 1fr; gap:18px; align-items:start; }
   @media (max-width:600px) { .editor { grid-template-columns:1fr; justify-items:center; } }
   .screen { width:264px; height:264px; border-radius:50%; overflow:hidden; background:#000; box-shadow:0 0 0 8px #222, 0 0 0 9px #333; }
@@ -81,13 +95,18 @@
     <p class="muted" style="margin-top:10px">Os 6 primeiros vêm no firmware. Os espaços 1 e 2 guardam temas enviados daqui.</p>
   </section>
 
-  <section class="card">
+  <section class="card" id="presetsCard">
     <h2>Criar tema</h2>
     <p class="muted">Escolha uma base e ajuste. A prévia mostra exatamente as 256 cores que vão para a tela.</p>
-    <div class="presets" id="presets"></div>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Categorias de tema"></div>
+    <div id="presets" role="tabpanel"></div>
   </section>
 
-  <section class="card">
+  <section class="card" id="editorCard">
+    <div class="edit-head">
+      <h2><span>Editando:</span> <b id="editName"></b></h2>
+      <button id="backToPresets" type="button">↑ Trocar tema</button>
+    </div>
     <div class="editor">
       <div class="screen"><canvas id="preview" width="480" height="480"></canvas></div>
       <div class="fields">
@@ -129,8 +148,17 @@
 // ================= theme being edited =================
 const BUILTIN = ['Padrão', 'W', 'U', 'B', 'R', 'G'];
 const BUILTIN_COLORS = ['#181c18', '#f8f4c8', '#3894f8', '#a858d8', '#f84430', '#38d058'];
-const presets = THEMES.filter(t => t.group !== 'Atuais (2 cores)')
-  .sort((a, b) => (b.group === 'Criativos') - (a.group === 'Criativos'));
+// preset categories shown as tabs; each lists [THEMES group, subheading or null]
+const CATS = [
+  { label: 'Elaborados', note: 'Com decoração desenhada no fundo: estrelas, vitrais, engrenagens, pixels…',
+    groups: [['Criativos', null]] },
+  { label: 'Magic', note: 'As cores de mana e as dez guildas de Ravnica, com o anel nas duas cores.',
+    groups: [['Mana (fundo tingido)', 'Cores de mana'], ['Guildas (2 manas)', 'Guildas']] },
+  { label: 'Simples', note: 'Fundo liso ou com um brilho suave, sem decoração.',
+    groups: [['Especiais', null]] },
+];
+const presets = CATS.flatMap(c => c.groups.flatMap(([g]) => THEMES.filter(t => t.group === g)));
+let curCat = 0, curPreset = presets[0];
 const EDIT = THEMES.length;              // the edited copy lives at the end of THEMES
 let photo = null;                        // HTMLImageElement or null
 const $ = id => document.getElementById(id);
@@ -144,6 +172,7 @@ function loadPreset(t) {
   THEMES[EDIT] = c;
   S.theme = EDIT;
   $('name').value = t.name.slice(0, 19);
+  $('editName').textContent = t.name;
   $('c_bg').value = c.bg; $('c_num').value = c.num; $('c_ring0').value = c.ring[0]; $('c_ring1').value = c.ring[1];
   $('c_acc').value = c.acc; $('c_muted').value = c.muted; $('fx').value = fx; $('c_fx').value = fxc;
   $('deco').checked = true;
@@ -342,6 +371,7 @@ async function cmd(bytes, ms) {
   return r;
 }
 
+const errText = e => (e && (e.message || e.name)) || String(e);
 function log(text, cls = '') { const l = $('log'); l.textContent = text; l.className = cls; }
 
 async function connect() {
@@ -358,25 +388,62 @@ async function connect() {
     ctrl.addEventListener('characteristicvaluechanged', onNotify);
     await refreshInfo();
   } catch (e) {
-    if (e.name !== 'NotFoundError') log('Falha ao conectar: ' + e.message, 'err');
+    if (e.name !== 'NotFoundError') log('Falha ao conectar: ' + errText(e), 'err');
     renderStatus();
   }
 }
 
 async function refreshInfo() {
   const r = await cmd([0x01]);
-  info = { ver: r[1], slots: r[2], mask: r[3], theme: r[4], builtin: r[5], enabled: !!r[6] };
+  info = { ver: r[1], slots: r[2], mask: r[3], theme: r[4], builtin: r[5], enabled: !!r[6], mtu: r.length > 7 ? r[7] : 0 };
+  if (info.mtu >= 23) chunk = Math.min(180, info.mtu - 3);   // a write never goes past MTU-3
   renderStatus();
 }
 
 async function selectTheme(i) {
   if (!info) return;
-  try { await cmd([0x05, i]); await refreshInfo(); } catch (e) { log(e.message, 'err'); }
+  try { await cmd([0x05, i]); await refreshInfo(); } catch (e) { log(errText(e), 'err'); }
 }
 
-async function writeData(bytes) {
-  if (data.writeValueWithoutResponse) await data.writeValueWithoutResponse(bytes);
+// Bluefy (iPhone/iPad) never delivers writes to DATA (without response they resolve and
+// vanish, with response they reject), so iOS sends the bytes as "06 + data" writes with
+// response to CTRL, which firmware v2 accepts (slower: one round trip per write). Anywhere
+// else, an upload whose first page is never acknowledged is retried once that way.
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+async function writeData(bytes, withResponse) {
+  if (withResponse && info.ver >= 2) {    // through CTRL: the path Bluefy delivers
+    const b = new Uint8Array(bytes.length + 1); b[0] = 0x06; b.set(bytes, 1);
+    await ctrl.writeValue(b);
+  } else if (withResponse) {
+    if (data.writeValueWithResponse) await data.writeValueWithResponse(bytes);
+    else await data.writeValue(bytes);
+  } else if (data.writeValueWithoutResponse) await data.writeValueWithoutResponse(bytes);
   else await data.writeValue(bytes);
+}
+
+async function sendRecord(slot, rec, withResponse) {
+  const size = rec.length;
+  for (let i = inbox.length - 1; i >= 0; i--) if (inbox[i][0] === 0x03) inbox.splice(i, 1);   // stale acks
+  await cmd([0x02, slot, size & 255, (size >> 8) & 255, (size >> 16) & 255, size >>> 24], 20000);
+  const step = withResponse ? Math.min(info.ver >= 2 ? 243 : 244, info.mtu >= 23 ? info.mtu - (info.ver >= 2 ? 4 : 3) : 19) : chunk;
+  let sent = 0, acked = 0;
+  const WINDOW = 8192;
+  while (acked < size) {
+    while (sent < size && sent - acked < WINDOW) {
+      const part = rec.subarray(sent, Math.min(size, sent + step));
+      try { await writeData(part, withResponse); }
+      catch (e) { if (!withResponse && chunk > 20) { chunk = 20; continue; } throw e; }
+      sent += part.length;
+    }
+    let r;
+    try { r = await nextMsg(m => m[0] === 0x03 || m[0] === 0x7F, 10000); }
+    catch (e) { if (acked === 0 && !withResponse) e.noData = true; throw e; }
+    if (r[0] === 0x7F) throw new Error('o aparelho recusou os dados (erro ' + r[1] + ')');
+    acked = r[1] | (r[2] << 8) | (r[3] << 16) | (r[4] << 24);
+    $('prog').value = acked / size;
+    log(`Enviando… ${Math.round(acked / 1024)} de ${Math.round(size / 1024)} KB`);
+  }
 }
 
 async function upload(slot) {
@@ -386,22 +453,14 @@ async function upload(slot) {
   btns.forEach(b => b.disabled = true);
   try {
     log('Preparando o espaço ' + (slot + 1) + '…');
-    const size = rec.length;
-    await cmd([0x02, slot, size & 255, (size >> 8) & 255, (size >> 16) & 255, size >>> 24], 20000);
-    let sent = 0, acked = 0;
-    const t0 = performance.now(), WINDOW = 8192;
-    while (acked < size) {
-      while (sent < size && sent - acked < WINDOW) {
-        const part = rec.subarray(sent, Math.min(size, sent + chunk));
-        try { await writeData(part); }
-        catch (e) { if (chunk > 20) { chunk = 20; continue; } throw e; }
-        sent += part.length;
-      }
-      const r = await nextMsg(m => m[0] === 0x03 || m[0] === 0x7F, 10000);
-      if (r[0] === 0x7F) throw new Error('o aparelho recusou os dados (erro ' + r[1] + ')');
-      acked = r[1] | (r[2] << 8) | (r[3] << 16) | (r[4] << 24);
-      $('prog').value = acked / size;
-      log(`Enviando… ${Math.round(acked / 1024)} de ${Math.round(size / 1024)} KB`);
+    const t0 = performance.now();
+    try {
+      await sendRecord(slot, rec, IOS);
+    } catch (e) {
+      if (!e.noData) throw e;
+      log('Nada chegou ao aparelho; tentando de novo no modo mais lento…');
+      $('prog').value = 0;
+      await sendRecord(slot, rec, true);
     }
     const end = await cmd([0x04], 10000);
     if (end[1] !== 0) throw new Error('a verificação no aparelho falhou');
@@ -409,7 +468,7 @@ async function upload(slot) {
     await refreshInfo();
     log(`Tema enviado em ${((performance.now() - t0) / 1000).toFixed(1)} s e aplicado.`, 'ok');
   } catch (e) {
-    log('Falha no envio: ' + e.message, 'err');
+    log('Falha no envio: ' + errText(e), 'err');
   } finally {
     btns.forEach(b => b.disabled = false);
     renderStatus();
@@ -444,17 +503,51 @@ function renderStatus() {
   if (on && !info.enabled) log('O firmware ficou grande demais e ocupou a área dos temas.', 'err');
 }
 
-function renderPresets() {
-  const p = $('presets'); p.innerHTML = '';
-  presets.forEach(t => {
-    const keep = S.theme; S.theme = THEMES.indexOf(t);
-    const e = document.createElement('button'); e.className = 'preset';
-    e.innerHTML = `<span class="th"><svg viewBox="0 0 240 240">${background()}${gradRing()}${bigNum(33)}</svg></span>${t.name}`;
-    S.theme = keep;
-    e.onclick = () => { document.querySelectorAll('.preset').forEach(x => x.classList.remove('sel')); e.classList.add('sel'); loadPreset(t); };
-    p.append(e);
+function renderTabs() {
+  const tabs = $('tabs'); tabs.innerHTML = '';
+  CATS.forEach((c, i) => {
+    const n = c.groups.reduce((k, [g]) => k + THEMES.filter(t => t.group === g).length, 0);
+    const e = document.createElement('button');
+    e.type = 'button'; e.setAttribute('role', 'tab'); e.setAttribute('aria-selected', i === curCat);
+    e.innerHTML = `${c.label} <span>${n}</span>`;
+    e.onclick = () => { curCat = i; renderTabs(); renderPresets(); };
+    tabs.append(e);
   });
-  p.firstChild.classList.add('sel');
+}
+
+function presetButton(t) {
+  const keep = S.theme; S.theme = THEMES.indexOf(t);
+  const e = document.createElement('button'); e.type = 'button';
+  e.className = 'preset' + (t === curPreset ? ' sel' : '');
+  e.innerHTML = `<span class="th"><svg viewBox="0 0 240 240">${background()}${gradRing()}${bigNum(33)}</svg></span>${t.name}`;
+  S.theme = keep;
+  e.onclick = () => {
+    document.querySelectorAll('.preset').forEach(x => x.classList.remove('sel'));
+    e.classList.add('sel');
+    curPreset = t;
+    loadPreset(t);
+    focusCard('editorCard');
+  };
+  return e;
+}
+
+function renderPresets() {
+  const p = $('presets'), c = CATS[curCat]; p.innerHTML = '';
+  const note = document.createElement('p'); note.className = 'muted cat-note'; note.textContent = c.note; p.append(note);
+  for (const [g, sub] of c.groups) {
+    if (sub) { const h = document.createElement('h3'); h.className = 'cat-sub'; h.textContent = sub; p.append(h); }
+    const grid = document.createElement('div'); grid.className = 'presets';
+    THEMES.filter(t => t.group === g).forEach(t => grid.append(presetButton(t)));
+    p.append(grid);
+  }
+}
+
+// scrolls a card into view and flashes its border so the eye lands on it
+function focusCard(id) {
+  const el = $(id);
+  const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  el.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
 }
 
 if (!navigator.bluetooth) {
@@ -475,6 +568,9 @@ $('photo').addEventListener('change', e => {
   img.onload = () => { photo = img; $('darkWrap').hidden = false; update(); };
   img.src = URL.createObjectURL(f);
 });
+$('backToPresets').onclick = () => focusCard('presetsCard');
+$('name').addEventListener('input', () => { $('editName').textContent = $('name').value || '(sem nome)'; });
+renderTabs();
 renderPresets();
 renderStatus();
 document.fonts.ready.then(() => loadPreset(presets[0]));

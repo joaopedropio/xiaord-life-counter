@@ -1352,16 +1352,18 @@ void onTouchEnd() {
 // ================= BLE: themes from the web page =================
 // One GATT service (UUIDs 4d5447xx-6c69-6665-2d63-6f756e746572, "MTG.life-counter"):
 //   CTRL (write + notify): commands, answered by a notify starting with the same byte
-//     01                    INFO   -> 01 ver slots validMask theme builtinCount enabled
+//     01                    INFO   -> 01 ver slots validMask theme builtinCount enabled mtu
 //     02 slot size(u32)     BEGIN  -> 02 status        (erases the slot, then accepts DATA)
 //     04                    END    -> 04 status        (CRC check; 0 = slot valid)
 //     05 theme              SELECT -> 05 status        (0..5 built in, 6.. custom slots)
+//     06 bytes...           DATA via CTRL, no reply (v2). Bluefy on iOS never delivers
+//                           writes to DATA, with or without response, but CTRL works.
 //   DATA (write without response): the record bytes, in order. Every flash page
 //     written is acknowledged with 03 bytesWritten(u32); the page keeps at most
 //     RX_SIZE/2 bytes in flight past the last ack, so the buffer never overflows.
 //   Errors: 7F code (1 = buffer overflow, 2 = unexpected data).
 // Callbacks run in the BLE task: they only queue; loop() does the work.
-const uint8_t PROTO_VERSION = 1;
+const uint8_t PROTO_VERSION = 2;      // 2: DATA bytes can also come through CTRL (06 ...)
 const uint8_t UUID_SVC[16]  = { 0x72,0x65,0x74,0x6e,0x75,0x6f,0x63,0x2d,0x65,0x66,0x69,0x6c,0x00,0x47,0x54,0x4d };
 const uint8_t UUID_CTRL[16] = { 0x72,0x65,0x74,0x6e,0x75,0x6f,0x63,0x2d,0x65,0x66,0x69,0x6c,0x01,0x47,0x54,0x4d };
 const uint8_t UUID_DATA[16] = { 0x72,0x65,0x74,0x6e,0x75,0x6f,0x63,0x2d,0x65,0x66,0x69,0x6c,0x02,0x47,0x54,0x4d };
@@ -1408,13 +1410,18 @@ void ctInit() {
   DBG("custom themes: app ends 0x%lx, slots valid %d %d", appEnd, ctValid[0], ctValid[1]);
 }
 
-void onCtrlWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint16_t len) {
+void onDataWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint16_t len);
+void onCtrlWrite(uint16_t conn, BLECharacteristic *chr, uint8_t *data, uint16_t len) {
+  if (len > 1 && data[0] == 0x06) { onDataWrite(conn, chr, data + 1, len - 1); return; }
   if (cmdLen || len == 0 || len > sizeof(cmdBuf)) return;   // one command at a time
   for (int i = 0; i < len; i++) cmdBuf[i] = data[i];
   cmdLen = len;
 }
 
+uint16_t bleConn = 0;                    // handle of the current (only) connection
+volatile uint32_t rxBytes = 0, rxWrites = 0, rxMinLen = 9999, rxMaxLen = 0;   // diag
 void onDataWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint16_t len) {
+  rxBytes += len; rxWrites++; if (len < rxMinLen) rxMinLen = len; if (len > rxMaxLen) rxMaxLen = len;
   for (int i = 0; i < len; i++) {
     uint32_t n = (rxHead + 1) % RX_SIZE;
     if (n == rxTail) { rxOverflow = true; return; }
@@ -1442,8 +1449,13 @@ void bleCommand(const uint8_t *c, int n) {
     case 0x01: {
       uint8_t mask = 0;
       for (int k = 0; k < CT_SLOTS; k++) if (ctValid[k]) mask |= 1 << k;
-      uint8_t r[7] = { 0x01, PROTO_VERSION, CT_SLOTS, mask, (uint8_t)theme, (uint8_t)THEME_COUNT, ctEnabled };
-      bleReply(r, 7);
+      // byte 7 = current ATT MTU (older pages ignore it; they must size DATA writes to MTU-3)
+      BLEConnection *conn = Bluefruit.Connection(bleConn);
+      uint16_t mtu = conn ? conn->getMtu() : 23;
+      uint8_t r[8] = { 0x01, PROTO_VERSION, CT_SLOTS, mask, (uint8_t)theme, (uint8_t)THEME_COUNT, ctEnabled,
+                       (uint8_t)(mtu > 255 ? 255 : mtu) };
+      bleReply(r, 8);
+      DBG("ble info, mtu %d", mtu);
       break;
     }
     case 0x02: {
@@ -1461,7 +1473,7 @@ void bleCommand(const uint8_t *c, int n) {
       unsigned long t0 = millis();
       for (uint32_t a = 0; a < (size + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE; a += PAGE_SIZE)
         flashErasePage(CT_BASE + slot * CT_SLOT_BYTES + a);
-      DBG("ble begin slot %d size %lu, erase %lu ms", slot, size, millis() - t0);
+      DBG("ble begin slot %d size %lu, erase %lu ms, mtu %d", slot, size, millis() - t0, Bluefruit.Connection(bleConn) ? Bluefruit.Connection(bleConn)->getMtu() : -1);
       upSlot = slot; upSize = size; upWritten = 0; upFill = 0;
       rxTail = rxHead; rxOverflow = false;
       upState = UP_RECV;
@@ -1528,9 +1540,14 @@ void bleTask() {
   }
 }
 
-void onBleConnect(uint16_t conn) { DBG("ble connected"); }
+void onBleConnect(uint16_t conn) {
+  bleConn = conn;
+  rxBytes = rxWrites = rxMaxLen = 0; rxMinLen = 9999;
+  BLEConnection *c = Bluefruit.Connection(conn);
+  DBG("ble connected, mtu %d, interval %d", c ? c->getMtu() : -1, c ? c->getConnectionInterval() : -1);
+}
 void onBleDisconnect(uint16_t conn, uint8_t reason) {
-  DBG("ble disconnected, reason 0x%02x", reason);
+  DBG("ble disconnected, reason 0x%02x; rx %lu bytes in %lu writes (len %lu..%lu)", reason, rxBytes, rxWrites, rxMinLen, rxMaxLen);
   upState = UP_IDLE;
 }
 
@@ -1546,7 +1563,7 @@ void bleBegin() {
   mtgSvc.begin();
   ctrlChr.setProperties(CHR_PROPS_WRITE | CHR_PROPS_NOTIFY);
   ctrlChr.setPermission(SECMODE_OPEN, SECMODE_OPEN);
-  ctrlChr.setMaxLen(20);
+  ctrlChr.setMaxLen(244);               // commands are short; 06 + data fills an MTU-247 write
   ctrlChr.setWriteCallback(onCtrlWrite);
   ctrlChr.begin();
   dataChr.setProperties(CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
@@ -1681,8 +1698,8 @@ void loop() {
   static unsigned long lastBeat = 0;
   if (millis() - lastBeat > 2000) {
     lastBeat = millis();
-    DBG("alive t=%lu life=%d touching=%d i2c err=%lu timeouts=%lu",
-        millis(), life, touching, i2cErrors, i2cTimeouts);
+    DBG("alive t=%lu life=%d touching=%d i2c err=%lu timeouts=%lu rx=%lu/%lu up=%d written=%lu",
+        millis(), life, touching, i2cErrors, i2cTimeouts, rxBytes, rxWrites, upState, upWritten);
   }
 #endif
   int x, y;
