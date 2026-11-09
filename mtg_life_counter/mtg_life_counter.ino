@@ -66,7 +66,8 @@ const unsigned long RELEASE_MS = 80; // touch ends after this long with no valid
 const unsigned long SAVE_DELAY_MS = 3000; // save to flash this long after the last change
 const bool  INVERT_DIRECTION = false; // set true if clockwise subtracts on your unit
 const bool  SPI_32MHZ = true;         // set false if the screen shows glitches (falls back to 16 MHz)
-#define DEBUG 1                       // serial log at 115200 (0 to disable)
+#define FW_VERSION "0.1.0"
+#define DEBUG 0                       // 1 = serial log at 115200 + test commands (development only)
 
 #if DEBUG
   #define DBG(...) do { Serial.printf(__VA_ARGS__); Serial.println(); } while (0)
@@ -1423,9 +1424,13 @@ void onCtrlWrite(uint16_t conn, BLECharacteristic *chr, uint8_t *data, uint16_t 
 }
 
 uint16_t bleConn = 0;                    // handle of the current (only) connection
+#if DEBUG
 volatile uint32_t rxBytes = 0, rxWrites = 0, rxMinLen = 9999, rxMaxLen = 0;   // diag
+#endif
 void onDataWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint16_t len) {
+#if DEBUG
   rxBytes += len; rxWrites++; if (len < rxMinLen) rxMinLen = len; if (len > rxMaxLen) rxMaxLen = len;
+#endif
   for (int i = 0; i < len; i++) {
     uint32_t n = (rxHead + 1) % RX_SIZE;
     if (n == rxTail) { rxOverflow = true; return; }
@@ -1552,7 +1557,9 @@ void bleTask() {
 
 void onBleConnect(uint16_t conn) {
   bleConn = conn;
+#if DEBUG
   rxBytes = rxWrites = rxMaxLen = 0; rxMinLen = 9999;
+#endif
   BLEConnection *c = Bluefruit.Connection(conn);
   DBG("ble connected, mtu %d, interval %d", c ? c->getMtu() : -1, c ? c->getConnectionInterval() : -1);
   if (c) c->requestPHY(BLE_GAP_PHY_2MBPS);   // falls back to 1M if the central can't
@@ -1648,7 +1655,7 @@ void setup() {
   }
 #endif
   lastActivityMs = millis();
-  DBG("boot (life=%d theme=%d font=%d start=%d bright=%d sleep=%ds), first frame in %lu us", life, theme, fontIdx, startingLife, brightness, SLEEP_SECS[sleepIdx], frameUs);
+  DBG("MTG Life Counter v" FW_VERSION " boot (life=%d theme=%d font=%d start=%d bright=%d sleep=%ds), first frame in %lu us", life, theme, fontIdx, startingLife, brightness, SLEEP_SECS[sleepIdx], frameUs);
 }
 
 #if DEBUG

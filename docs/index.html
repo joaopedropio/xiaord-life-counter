@@ -73,6 +73,11 @@
   #log { font-size:13px; color:var(--muted); min-height:1.4em; }
   #log.err { color:var(--err); }
   #log.ok { color:var(--ok); }
+  a { color:var(--acc); }
+  a.btn { display:inline-block; text-decoration:none; font-weight:600; border-radius:10px; padding:10px 14px; }
+  a.btn.primary { background:var(--acc); color:#1a1300; }
+  .steps { margin:12px 0 10px; padding-left:20px; line-height:1.5; }
+  .steps li { margin-bottom:4px; }
   footer { margin-top:24px; font-size:12px; color:var(--muted); line-height:1.5; }
 </style>
 </head>
@@ -133,6 +138,21 @@
     <div class="slots" id="slots"></div>
     <div style="margin-top:12px"><progress id="prog" max="1" value="0"></progress></div>
     <div id="log"></div>
+  </section>
+
+  <section class="card" id="firmware">
+    <h2>Firmware</h2>
+    <div class="row" style="justify-content:space-between">
+      <div><b>v0.1.0</b> <span class="muted">· 9 nov 2026 · XIAO nRF52840 + Round Display</span></div>
+      <a class="btn primary" href="firmware/mtg-life-counter-v0.1.0.uf2" download>Baixar .uf2</a>
+    </div>
+    <ol class="steps">
+      <li>Ligue o XIAO no computador pelo USB-C.</li>
+      <li>Dê dois cliques rápidos no botão de reset. Aparece o drive <b>XIAO-SENSE</b> (ou XIAO-BOOT).</li>
+      <li>Arraste o arquivo <b>.uf2</b> para o drive. A placa grava e reinicia sozinha.</li>
+    </ol>
+    <p class="muted">Atualizar não apaga a vida salva, as configurações nem os temas enviados.
+      Código e instruções em <a href="https://github.com/joaopedropio/xiaord-life-counter">github.com/joaopedropio/xiaord-life-counter</a>.</p>
   </section>
 
   <footer>

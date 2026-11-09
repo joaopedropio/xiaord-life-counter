@@ -75,6 +75,8 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
   que a pasta tenha o mesmo nome do .ino)
 - `mtg_life_counter/driver.h` — seleção de placa/tela para Seeed_GFX
 - `NOTES.md` — este arquivo
+- `README.md` — apresentação, prints e instalação
+- `docs/firmware/` — `.uf2` publicados; `docs/img/` — prints da tela
 - `backup/` — firmware ZMK original do XIAO (ignorado pelo git)
 
 ## Como a interface funciona
@@ -296,8 +298,22 @@ git clone https://github.com/Seeed-Studio/Seeed_Arduino_FS ~/Documents/Arduino/l
 - No Mac o atalho `python` foi criado só na pasta temporária da sessão; recriar
   (`~/.local/bin/python` com o script de "Rodar no Mac") antes de compilar.
 
+## Versões (release)
+- **v0.1.0 (2026-11-09):** primeira versão de produção. `DEBUG 0` (sem log serial, comandos de
+  teste, espera pelo monitor nem contadores de diagnóstico do BLE); `FW_VERSION` no topo do sketch.
+  636.824 bytes (78%).
+- O `DEBUG` no repositório fica em **0**. Para desenvolver, mudar para 1 localmente (os comandos de
+  teste pela serial e o `tools/flash.sh --log` dependem dele) e voltar para 0 antes de commitar.
+- Gerar uma versão: subir `FW_VERSION`, compilar com `--output-dir build` (pasta ignorada pelo git),
+  converter com `python3 ~/Library/Arduino15/packages/Seeeduino/hardware/nrf52/1.1.13/tools/uf2conv/uf2conv.py
+  -f 0xADA52840 -c -o build/mtg-life-counter-vX.Y.Z.uf2 build/mtg_life_counter.ino.hex`, copiar
+  para `docs/firmware/`, atualizar o card "Firmware" em `docs/index.html` e o README, publicar o
+  site (copiar `docs/` para `mtg-life/`) e criar a tag `vX.Y.Z`.
+- Prints do README (`docs/img/`): tirados do framebuffer real com um comando serial `shot`
+  temporário (não commitado; precisa de `Serial.write` em pedaços em laço, senão o CDC descarta
+  o que não cabe) e convertidos de RGB565 (bytes trocados) para PNG.
+
 ## Ideias para próximos passos
 - Case impresso em 3D com acesso à chave liga/desliga e ao USB-C
-- Desligar `DEBUG` na versão final
 - Escolher layout da tela de vida / menu entre os mockups
 - Mais espaços de tema (comprimir com RLE) ou microSD
