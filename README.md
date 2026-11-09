@@ -37,7 +37,9 @@ temas criados no site.
 
 Os temas personalizados são feitos no editor
 **[joaopedropio.github.io/mtg-life](https://joaopedropio.github.io/mtg-life/)**: escolha uma base,
-mude cores, efeito do número ou use uma foto de fundo, e envie pelo Bluetooth. Funciona no
+mude cores, efeito do número ou use uma foto de fundo, e envie pelo Bluetooth. O Bluetooth fica
+desligado: antes de conectar, ligue no aparelho em **Menu → Tema → ícone do Bluetooth** (ele desliga
+sozinho depois). Funciona no
 Chrome/Edge (Android, Windows, Mac, Linux); no iPhone use o app gratuito **Bluefy**.
 
 ### Telas
@@ -51,9 +53,35 @@ Chrome/Edge (Android, Windows, Mac, Linux); no iPhone use o app gratuito **Bluef
 - **Brilho:** 1–100% e tempo para apagar a tela (nunca, 5 s até 5 min). O primeiro toque com a
   tela apagada só acende, sem mudar a vida.
 - **Fonte:** 12 fontes para o número, com prévia.
+- **Bluetooth** (em Tema): fica desligado até você ligar para receber um tema do site.
 - **Bateria baixa:** abaixo de 20% o brilho cai e a tela apaga mais cedo, até ligar o USB.
 
-Vida, modo, tema, fonte, brilho e tempo de apagar ficam salvos e voltam ao religar.
+Vida, modo, tema, fonte, layout, brilho e tempo de apagar ficam salvos e voltam ao religar.
+
+### Layouts
+
+Em **Menu → Tema → layout** dá para escolher como a tela de vida e o menu aparecem. A tela de
+escolha mostra miniaturas reais; tocar numa passa para o próximo layout, e "Fundo" põe a imagem do
+tema personalizado atrás do menu.
+
+| A Atual | B Anel de vida | C Marcas | D Dicas | E Recentes | F Halo |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| <img src="docs/img/layout_a.png" width="120"> | <img src="docs/img/layout_b.png" width="120"> | <img src="docs/img/layout_c.png" width="120"> | <img src="docs/img/layout_d.png" width="120"> | <img src="docs/img/layout_e.png" width="120"> | <img src="docs/img/layout_f.png" width="120"> |
+
+- **B:** o anel mostra a vida em relação à inicial. **C:** os tracinhos acendem perto do dedo.
+  **D:** − e + lembram onde tocar. **E:** as 3 últimas mudanças embaixo do número. **F:** brilho na
+  cor do tema.
+
+| 1 Grade | 2 Radial | 3 Fatias | 4 Carrossel | 5 Redondos | 6 Lista |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| <img src="docs/img/menu_1.png" width="120"> | <img src="docs/img/menu_2.png" width="120"> | <img src="docs/img/menu_3.png" width="120"> | <img src="docs/img/menu_4.png" width="120"> | <img src="docs/img/menu_5.png" width="120"> | <img src="docs/img/menu_6.png" width="120"> |
+
+No carrossel e na lista, gire o dedo pela borda para trocar de item e toque no item do meio.
+
+<p align="center">
+  <img src="docs/img/picker.png" width="180" alt="Escolha de layout">
+  <img src="docs/img/bluetooth.png" width="180" alt="Tela do Bluetooth">
+</p>
 
 ## Hardware
 
@@ -68,8 +96,9 @@ A chave deslizante da borda liga e desliga o aparelho; a bateria carrega pelo US
 
 ## Instalar o firmware
 
-1. Baixe o arquivo **`mtg-life-counter-v0.1.0.uf2`** na
-   [página de download](https://joaopedropio.github.io/mtg-life/#firmware).
+1. Baixe o arquivo **`mtg-life-counter-v0.2.0.uf2`** na
+   [página de download](https://joaopedropio.github.io/mtg-life/#firmware) ou nas
+   [releases](https://github.com/joaopedropio/xiaord-life-counter/releases).
 2. Ligue o XIAO no computador pelo USB-C.
 3. Dê **dois cliques rápidos no botão de reset** do XIAO. Aparece um drive chamado
    `XIAO-SENSE` (ou `XIAO-BOOT`).

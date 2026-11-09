@@ -66,7 +66,7 @@ const unsigned long RELEASE_MS = 80; // touch ends after this long with no valid
 const unsigned long SAVE_DELAY_MS = 3000; // save to flash this long after the last change
 const bool  INVERT_DIRECTION = false; // set true if clockwise subtracts on your unit
 const bool  SPI_32MHZ = true;         // set false if the screen shows glitches (falls back to 16 MHz)
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.2.0"
 #define DEBUG 0                       // 1 = serial log at 115200 + test commands (development only)
 
 #if DEBUG
@@ -82,6 +82,7 @@ const bool  SPI_32MHZ = true;         // set false if the screen shows glitches 
 #define BATTERY_PIN A0
 
 const uint16_t GREY = 0x7BEF;
+const uint16_t BTN_FILL = 0x18E3;       // very dark grey (button fill)
 const int W = 240, H = 240;
 const int CX = 120, CY = 120;
 
@@ -173,6 +174,26 @@ const int MENU_MIN_SLEEP_S = 15;        // floor for the auto-off outside the li
 bool asleep = false;
 unsigned long lastActivityMs = 0;
 
+// ---- screen layouts (Menu > Tema > Layout) ----
+// life screen A..F and main menu 1..6, from tools/mockups/layouts.html
+enum { L_CLASSIC, L_LIFEBAR, L_TICKS, L_HINTS, L_HISTORY, L_HALO, LIFE_LAYOUTS };
+const char *LIFE_LAYOUT_NAMES[LIFE_LAYOUTS] = { "Atual", "Anel de vida", "Marcas", "Dicas", "Recentes", "Halo" };
+enum { ML_GRID, ML_RADIAL, ML_SLICES, ML_CAROUSEL, ML_CIRCLES, ML_LIST, MENU_LAYOUTS };
+const char *MENU_LAYOUT_NAMES[MENU_LAYOUTS] = { "Grade", "Radial", "Fatias", "Carrossel", "Redondos", "Lista" };
+int  lifeLayout = L_CLASSIC;
+int  menuLayout = ML_GRID;
+bool menuBg = true;                     // custom theme image behind the main menu
+int  menuCur = 7;                       // carousel / list: highlighted item (M_BACK)
+bool menuDirty = false;
+const int MENU_STEP_DEG = 30;           // rim travel per item in the carousel / list
+bool rimMoved = false;                  // the current rim touch changed something
+// L_HISTORY: last changes (each one lands 2 s after the last touch), oldest first
+const int HIST_N = 3;
+int  hist[HIST_N];
+int  histCount = 0;
+// L_TICKS: finger angle (0 = top, clockwise) the ticks show / should show; -1 = none
+float tickShown = -1, tickWant = -1;
+
 // what the current touch started on
 enum Zone { Z_NONE, Z_RIM, Z_CENTER, Z_PLUS, Z_MINUS, Z_MENU };
 Zone zone = Z_NONE;
@@ -198,7 +219,16 @@ int  wantMarkerX = -1, wantMarkerY = -1;
 int  markerX = -1, markerY = -1;
 
 // which screen is showing; everything but S_LIFE handles taps on touch end
-enum Screen { S_LIFE, S_MENU, S_DICE_PICK, S_DICE_RESULT, S_BRIGHT, S_THEME, S_FONT };
+enum Screen { S_LIFE, S_MENU, S_DICE_PICK, S_DICE_RESULT, S_BRIGHT, S_THEME, S_FONT, S_LAYOUT, S_BLE };
+
+// Bluetooth is off until "Conectar" (Menu > Tema > Bluetooth): it advertises for BLE_ADV_S,
+// a connection with no traffic for BLE_IDLE_S is dropped, and it doesn't come back on by itself.
+const unsigned long BLE_ADV_S = 180, BLE_IDLE_S = 120;
+bool bleAdvertising = false;
+volatile bool bleConnected = false;
+volatile bool bleUiDirty = false;       // S_BLE status changed (set from the BLE callbacks)
+unsigned long bleOnMs = 0;              // advertising started
+volatile unsigned long bleLastMs = 0;   // last traffic on the connection
 Screen screen = S_LIFE;
 
 unsigned long lastBatteryMs = 0;
@@ -225,7 +255,7 @@ struct SavedState {                      // one 16-byte record in the flash log
   uint8_t  brightness;                   // backlight %, 1..100
   uint8_t  sleep5s;                      // auto-off time / 5 s (0 = never)
   uint8_t  font;                         // index in FONTS (0xFF in old records = default)
-  uint8_t  reserved;                     // 0xFF; room for a future setting
+  uint8_t  layout;                       // life layout | menu layout << 4 | 0x80 = no menu image (0xFF in old records = defaults)
   uint8_t  theme;                        // low nibble = theme (0xFF in old records = default)
   uint32_t check;                        // checksum over the other fields
 };
@@ -234,7 +264,7 @@ bool saveDirty = false;
 // menu buttons: rectangles used both for drawing and for hit-testing
 // icons drawn instead of text on buttons and screen titles
 enum Icon : uint8_t { I_NONE, I_RESET, I_DICE, I_SUN, I_PALETTE, I_BACK, I_CHECK, I_MOON, I_INF,
-                     I_LEFT, I_RIGHT };
+                     I_LEFT, I_RIGHT, I_LAYOUT, I_BT };
 struct Btn { int x, y, w, h; const char *label; uint8_t icon; };   // label or icon
 unsigned long saveDirtySince = 0;
 
@@ -495,6 +525,12 @@ void loadState() {
   int t = best->theme & 0x0F;
   theme = t < THEME_COUNT + CT_SLOTS ? t : 0;  // custom slots are checked in ctInit()
   fontIdx = best->font < FONT_COUNT ? best->font : 0;
+  if (best->layout != 0xFF) {
+    int l = best->layout & 0x0F, m = (best->layout >> 4) & 0x07;
+    lifeLayout = l < LIFE_LAYOUTS ? l : L_CLASSIC;
+    menuLayout = m < MENU_LAYOUTS ? m : ML_GRID;
+    menuBg = !(best->layout & 0x80);
+  }
   DBG("loaded life=%d start=%d (page %d slot %d seq %lu)",
       life, startingLife, activePage, nextSlot - 1, lastSeq);
 }
@@ -502,7 +538,8 @@ void loadState() {
 void saveState() {
   saveDirty = false;
   SavedState s = { lastSeq + 1, (int16_t)life, (uint8_t)startingLife, (uint8_t)brightness,
-                   (uint8_t)(SLEEP_SECS[sleepIdx] / 5), (uint8_t)fontIdx, 0xFF,
+                   (uint8_t)(SLEEP_SECS[sleepIdx] / 5), (uint8_t)fontIdx,
+                   (uint8_t)(lifeLayout | menuLayout << 4 | (menuBg ? 0 : 0x80)),
                    (uint8_t)theme, 0 };
   s.check = stateCheck(s);
   unsigned long t0 = micros();
@@ -583,22 +620,163 @@ void themeChanged() {
   for (int i = 0; i < 256; i++) ctPal[i] = swap16(pal[i]);
 }
 
-// Repaints a rect of the screen background: the custom image on the life screen,
-// black everywhere else. Does not mark it dirty.
+// The custom image shows on the life screen, and behind the main menu unless turned off.
+const CustomTheme *bgCustom() {
+  if (screen == S_LIFE || (screen == S_MENU && menuBg)) return activeCustom();
+  return nullptr;
+}
+
+// ---- life screen background, per layout ----
+// The ring / ticks / hints / halo / life bar are part of the background: restoreBg()
+// recomputes them pixel by pixel, so erasing the number or the dot never cuts them.
+const int RING_LO = 107 * 107 - 107, RING_HI = 110 * 110 + 110;   // r 106.5 .. 110.5
+const int THIN_LO = 11751, THIN_HI = 12012;                       // r 108.4 .. 109.6
+const int TICK_LO = 100 * 100, TICK_HI = 111 * 111;
+const int HALO_N = 452;                 // indexed by r^2 / 64 (corners: 28800 / 64 = 450)
+uint16_t haloLut[HALO_N];               // byte-swapped
+uint16_t bgRing, bgDim, bgThin, bgHintMinus, bgHintPlus;   // RGB565
+float    barShownDeg = 0;               // L_LIFEBAR: lit part of the ring, degrees from the top
+uint16_t barShownCol = 0;
+uint16_t tickCol[24];
+bool     tickLit[24];
+
+// 0 = top, clockwise, 0..360
+float angTop(int dx, int dy) {
+  float a = atan2f((float)dx, (float)-dy) * (180.0f / PI);
+  return a < 0 ? a + 360.0f : a;
+}
+
+float barDeg() {
+  if (startingLife <= 0) return 0;
+  return constrain((float)life / startingLife, 0.0f, 1.0f) * 360.0f;
+}
+
+void prepTicks() {
+  uint16_t ring = ringColor(), acc = accentColor();
+  for (int k = 0; k < 24; k++) {
+    float d = 999;
+    if (tickShown >= 0) { d = fabsf(k * 15.0f - tickShown); if (d > 180) d = 360 - d; }
+    tickLit[k] = d <= 30;
+    tickCol[k] = tickLit[k] ? fb.alphaBlend((uint8_t)(255 * (1 - d / 45)), acc, ring) : ring;
+  }
+}
+
+// call before repainting the life screen (theme, layout or starting life may have changed)
+void prepLifeBg() {
+  const CustomTheme *c = activeCustom();
+  bgRing = ringColor();
+  bgDim  = fb.alphaBlend(115, bgRing, TFT_BLACK);
+  bgThin = fb.alphaBlend(153, bgRing, TFT_BLACK);
+  bgHintMinus = c ? c->minus : TFT_RED;
+  bgHintPlus  = c ? c->plus : TFT_GREEN;
+  if (lifeLayout == L_HALO) {
+    uint16_t acc = accentColor();
+    for (int i = 0; i < HALO_N; i++) {
+      float r = sqrtf(i * 64.0f + 32) / 120.0f;
+      float a = r < 0.55f ? 0.24f - 0.16f * r / 0.55f : (r < 1 ? 0.08f * (1 - (r - 0.55f) / 0.45f) : 0);
+      haloLut[i] = swap16(fb.alphaBlend((uint8_t)(a * 255), acc, TFT_BLACK));
+    }
+  }
+  barShownDeg = barDeg();
+  barShownCol = lifeColor(life);
+  prepTicks();
+}
+
+inline uint16_t hintPx(uint16_t col, uint16_t baseSw) {
+  return swap16(fb.alphaBlend(115, col, swap16(baseSw)));
+}
+
+// one background pixel of the life screen (byte-swapped, like fbPix)
+uint16_t lifeBgPixel(int x, int y, const CustomTheme *c, const uint8_t *img) {
+  int dx = x - CX, dy = y - CY, r2 = dx * dx + dy * dy;
+  uint16_t base = c ? ctPal[img[y * W + x]] : (lifeLayout == L_HALO ? haloLut[min(r2 >> 6, HALO_N - 1)] : 0);
+  switch (lifeLayout) {
+    case L_CLASSIC:
+    case L_HISTORY:
+      if (!c && r2 >= RING_LO && r2 <= RING_HI) return swap16(bgRing);
+      break;
+    case L_HALO:
+      if (!c && r2 >= THIN_LO && r2 <= THIN_HI) return swap16(bgThin);
+      break;
+    case L_HINTS:                       // ring open at the bottom, faint - and + at the sides
+      if (!c && r2 >= RING_LO && r2 <= RING_HI) {
+        float a = angTop(dx, dy);
+        if (a < 160 || a > 200) return swap16(bgRing);
+      }
+      if (dy >= -2 && dy <= 2 && dx >= -88 && dx <= -72) return hintPx(bgHintMinus, base);
+      if ((dy >= -2 && dy <= 2 && dx >= 72 && dx <= 88) || (dx >= 78 && dx <= 82 && dy >= -8 && dy <= 8))
+        return hintPx(bgHintPlus, base);
+      break;
+    case L_LIFEBAR:                     // lit part = life / starting life
+      if (r2 >= RING_LO && r2 <= RING_HI) {
+        if (angTop(dx, dy) < barShownDeg) return swap16(barShownCol);
+        if (!c) return swap16(bgDim);
+      }
+      break;
+    case L_TICKS:                       // 24 ticks, one per life on the slider
+      if (r2 >= TICK_LO && r2 <= TICK_HI) {
+        float a = angTop(dx, dy);
+        int k = (int)lroundf(a / 15.0f);
+        float off = fabsf(a - k * 15.0f) * (PI / 180.0f) * sqrtf((float)r2);
+        k %= 24;
+        if (off <= (tickLit[k] ? 2.0f : 1.5f)) return swap16(tickCol[k]);
+      }
+      break;
+  }
+  return base;
+}
+
+// Repaints a rect of the screen background (life screen: per layout; menus: black or
+// the custom image). Does not mark it dirty.
 void restoreBg(int x, int y, int w, int h) {
   if (x < 0) { w += x; x = 0; }
   if (y < 0) { h += y; y = 0; }
   if (x + w > W) w = W - x;
   if (y + h > H) h = H - y;
   if (w <= 0 || h <= 0) return;
-  const CustomTheme *c = lifeCustom();
-  if (!c) { fb.fillRect(x, y, w, h, TFT_BLACK); return; }
-  const uint8_t *px = ctPixels(theme - THEME_COUNT);
+  const CustomTheme *c = bgCustom();
+  const uint8_t *img = c ? ctPixels(theme - THEME_COUNT) : nullptr;
+  if (screen != S_LIFE) {
+    if (!c) { fb.fillRect(x, y, w, h, TFT_BLACK); return; }
+    for (int yy = y; yy < y + h; yy++) {
+      uint16_t *d = fbPix + yy * W + x;
+      const uint8_t *src = img + yy * W + x;
+      for (int i = 0; i < w; i++) d[i] = ctPal[src[i]];
+    }
+    return;
+  }
   for (int yy = y; yy < y + h; yy++) {
     uint16_t *d = fbPix + yy * W + x;
-    const uint8_t *src = px + yy * W + x;
-    for (int i = 0; i < w; i++) d[i] = ctPal[src[i]];
+    for (int i = 0; i < w; i++) d[i] = lifeBgPixel(x + i, yy, c, img);
   }
+}
+
+// repaints the background ring pixels (rIn..rOut) between angles a0..a1 (from the top,
+// clockwise) and marks their bounding box dirty
+void repaintRim(float a0, float a1, int rIn, int rOut) {
+  int x0 = W, y0 = H, x1 = -1, y1 = -1;
+  if (a1 - a0 >= 360) { x0 = CX - rOut; y0 = CY - rOut; x1 = CX + rOut; y1 = CY + rOut; }
+  else {
+    for (float a = a0; ; a += 5) {
+      if (a > a1) a = a1;
+      float s = sinf(a * PI / 180), co = cosf(a * PI / 180);
+      for (int r = rIn; r <= rOut; r += rOut - rIn) {
+        int px = CX + (int)lroundf(r * s), py = CY - (int)lroundf(r * co);
+        x0 = min(x0, px); x1 = max(x1, px); y0 = min(y0, py); y1 = max(y1, py);
+      }
+      if (a >= a1) break;
+    }
+  }
+  x0 = max(x0 - 3, 0); y0 = max(y0 - 3, 0); x1 = min(x1 + 3, W - 1); y1 = min(y1 + 3, H - 1);
+  const CustomTheme *c = bgCustom();
+  const uint8_t *img = c ? ctPixels(theme - THEME_COUNT) : nullptr;
+  int lo = rIn * rIn - rIn, hi = rOut * rOut + rOut;
+  for (int y = y0; y <= y1; y++)
+    for (int x = x0; x <= x1; x++) {
+      int dx = x - CX, dy = y - CY, r2 = dx * dx + dy * dy;
+      if (r2 >= lo && r2 <= hi) fbPix[y * W + x] = lifeBgPixel(x, y, c, img);
+    }
+  markDirty(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
 }
 
 // Draws `s` centered on (cx, cy). Anti-aliasing blends with black, or with what is
@@ -610,7 +788,7 @@ void drawBig(const BigFont &f, const String &s, int cx, int cy, uint16_t color,
   bigExtent(f, s, minX, maxX);
   int x0 = cx - (maxX - minX) / 2 - minX;
   int y0 = cy - (f.top + f.height / 2);
-  bool blend = lifeCustom() != nullptr;
+  bool blend = screen == S_LIFE;         // blend with the background already in the framebuffer
   uint16_t shade[16];
   for (int a = 0; a < 16; a++) shade[a] = fb.alphaBlend(a * 17, color, TFT_BLACK);
   int pen = 0;
@@ -646,13 +824,21 @@ void drawRing() {
   for (int r = 107; r <= 110; r++) fb.drawCircle(CX, CY, r, ringColor());
 }
 
-// The dot (r 90..106 from center) never touches the ring (r 108..110).
+// The dot (r 90..106 from center) never touches the ring (r 106.5..110.5).
+void redrawMarkerIfIn(int x, int y, int w, int h) {
+  if (markerX < 0 || markerX + 9 < x || markerX - 9 >= x + w || markerY + 9 < y || markerY - 9 >= y + h) return;
+  fb.fillCircle(markerX, markerY, 8, accentColor());
+  markDirty(markerX - 9, markerY - 9, 19, 19);
+}
+
 void drawMarker() {
   if (wantMarkerX == markerX && wantMarkerY == markerY) return;
   if (markerX >= 0) {
-    if (lifeCustom()) restoreBg(markerX - 9, markerY - 9, 19, 19);
-    else              fb.fillCircle(markerX, markerY, 9, TFT_BLACK);
-    markDirty(markerX - 9, markerY - 9, 19, 19);
+    int ex = markerX - 9, ey = markerY - 9;
+    markerX = markerY = -1;
+    restoreBg(ex, ey, 19, 19);
+    markDirty(ex, ey, 19, 19);
+    repaintOverlaps(ex, ey, 19, 19);    // the dot may have covered part of the number / text
   }
   if (wantMarkerX >= 0) {
     fb.fillCircle(wantMarkerX, wantMarkerY, 8, accentColor());
@@ -660,6 +846,16 @@ void drawMarker() {
   }
   markerX = wantMarkerX;
   markerY = wantMarkerY;
+}
+
+// L_TICKS: the ticks near the finger light up (no dot)
+void drawTicks() {
+  if (tickWant == tickShown) return;
+  float old = tickShown;
+  tickShown = tickWant;
+  prepTicks();
+  if (old >= 0) repaintRim(old - 45, old + 45, 100, 111);
+  if (tickShown >= 0) repaintRim(tickShown - 45, tickShown + 45, 100, 111);
 }
 
 uint16_t lifeColor(int v) {
@@ -671,6 +867,8 @@ uint16_t lifeColor(int v) {
 }
 
 const int LIFE_W = 200, LIFE_H = 82;   // area cleared behind the big number
+int numY()   { return lifeLayout == L_HISTORY ? CY - 16 : CY; }
+int deltaY() { return lifeLayout == L_HISTORY ? CY - 76 : CY - 62; }
 
 // draws `v` with the chosen font: XL when it fits, else L (fits -999..999)
 // Custom themes add their effect (shadow / gradient) while the color is the normal one.
@@ -687,25 +885,72 @@ void drawNumber(int v, int cy, uint16_t color) {
   drawBig(f, s, CX, cy, color, grad ? c->fxColor : nullptr);
 }
 
-void drawLife() {
-  restoreBg(CX - LIFE_W / 2, CY - LIFE_H / 2, LIFE_W, LIFE_H);
-  drawNumber(life, CY, lifeColor(life));
-  markDirty(CX - LIFE_W / 2, CY - LIFE_H / 2, LIFE_W, LIFE_H);
+void paintNumber() {
+  int y = numY() - LIFE_H / 2;
+  restoreBg(CX - LIFE_W / 2, y, LIFE_W, LIFE_H);
+  drawNumber(life, numY(), lifeColor(life));
+  markDirty(CX - LIFE_W / 2, y, LIFE_W, LIFE_H);
+  redrawMarkerIfIn(CX - LIFE_W / 2, y, LIFE_W, LIFE_H);
 }
 
-const int DELTA_Y = CY - 62, DELTA_W = 90, DELTA_H = 30;
+void drawLife() {
+  paintNumber();
+  if (lifeLayout == L_LIFEBAR) {         // the ring follows life / starting life
+    float nd = barDeg();
+    uint16_t nc = lifeColor(life);
+    if (nc != barShownCol) { barShownDeg = nd; barShownCol = nc; repaintRim(0, 360, 107, 110); }
+    else if (nd != barShownDeg) {
+      float a0 = min(nd, barShownDeg), a1 = max(nd, barShownDeg);
+      barShownDeg = nd;
+      repaintRim(a0, a1, 107, 110);
+    }
+  }
+}
+
+const int DELTA_W = 90, DELTA_H = 30;
 
 void drawDelta() {
-  restoreBg(CX - DELTA_W / 2, DELTA_Y - DELTA_H / 2, DELTA_W, DELTA_H);
+  int y = deltaY();
+  restoreBg(CX - DELTA_W / 2, y - DELTA_H / 2, DELTA_W, DELTA_H);
   if (pendingDelta != 0) {
     String s = (pendingDelta > 0 ? "+" : "") + String(pendingDelta);
     const CustomTheme *c = lifeCustom();
     fb.setTextDatum(MC_DATUM);
     fb.setTextPadding(0);
     fb.setTextColor(pendingDelta > 0 ? (c ? c->plus : TFT_GREEN) : (c ? c->minus : TFT_RED));
-    fb.drawString(s, CX, DELTA_Y, 4);
+    fb.drawString(s, CX, y, 4);
   }
-  markDirty(CX - DELTA_W / 2, DELTA_Y - DELTA_H / 2, DELTA_W, DELTA_H);
+  markDirty(CX - DELTA_W / 2, y - DELTA_H / 2, DELTA_W, DELTA_H);
+  redrawMarkerIfIn(CX - DELTA_W / 2, y - DELTA_H / 2, DELTA_W, DELTA_H);
+}
+
+// L_HISTORY: a thin line under the number and the last changes
+const int HIST_X = 50, HIST_Y = 146, HIST_W = 140, HIST_H = 32;
+
+void paintHistory() {
+  if (screen != S_LIFE || lifeLayout != L_HISTORY) return;
+  restoreBg(HIST_X, HIST_Y, HIST_W, HIST_H);
+  const CustomTheme *c = lifeCustom();
+  fb.drawFastHLine(64, 152, 112, c ? c->fill : BTN_FILL);
+  fb.drawFastHLine(64, 153, 112, c ? c->fill : BTN_FILL);
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  for (int i = 0; i < histCount; i++) {
+    int v = hist[i];
+    uint16_t col = v > 0 ? (c ? c->plus : TFT_GREEN) : (c ? c->minus : TFT_RED);
+    if (!c) col = fb.alphaBlend(190, col, TFT_BLACK);
+    fb.setTextColor(col);
+    int x = CX + (2 * i - (histCount - 1)) * 21;
+    fb.drawString((v > 0 ? "+" : "") + String(v), x, 168, 2);
+  }
+  markDirty(HIST_X, HIST_Y, HIST_W, HIST_H);
+  redrawMarkerIfIn(HIST_X, HIST_Y, HIST_W, HIST_H);
+}
+
+void pushHistory(int v) {
+  if (histCount == HIST_N) { for (int i = 1; i < HIST_N; i++) hist[i - 1] = hist[i]; histCount--; }
+  hist[histCount++] = v;
+  paintHistory();
 }
 
 // Approximate reading; battery is behind a 1/2 divider on A0.
@@ -746,36 +991,82 @@ void readBattery() {
   lowBattery = low;
 }
 
-void drawBattery() {
-  readBattery();
-  if (screen != S_LIFE) return;         // menu covers it; redrawn when the menu closes
-  restoreBg(CX - 40, CY + 72, 80, 18);
-  const CustomTheme *c = lifeCustom();
-  fb.setTextDatum(MC_DATUM);
-  fb.setTextPadding(0);
-  fb.setTextColor(lowBattery ? (c ? c->minus : TFT_RED) : (c ? c->muted : GREY));
-  String txt = String(batPct) + "%";
-  int tx = shownUsb ? CX + 8 : CX;      // make room for the bolt
-  fb.drawString(txt, tx, CY + 80, 2);
-  if (shownUsb) drawBolt(tx - fb.textWidth(txt, 2) / 2 - 9, CY + 80, TFT_YELLOW);
-  markDirty(CX - 40, CY + 72, 80, 18);
+// where the battery goes on each layout
+void batteryBox(int &x, int &y, int &w, int &h) {
+  switch (lifeLayout) {
+    case L_TICKS:   x = 72; y = 176; w = 96; h = 37; break;          // short arc at the bottom
+    case L_HINTS:   x = CX - 32; y = CY + 85; w = 64; h = 18; break; // in the ring's gap
+    case L_HISTORY: x = CX - 40; y = CY + 73; w = 80; h = 18; break;
+    default:        x = CX - 40; y = CY + 72; w = 80; h = 18; break;
+  }
 }
 
-void fullRedraw() {
-  restoreBg(0, 0, W, H);
+void paintBattery() {
+  if (screen != S_LIFE) return;         // menu covers it; redrawn when the menu closes
+  int bx, by, bw, bh;
+  batteryBox(bx, by, bw, bh);
+  restoreBg(bx, by, bw, bh);
+  const CustomTheme *c = lifeCustom();
+  uint16_t col = lowBattery ? (c ? c->minus : TFT_RED) : (c ? c->muted : GREY);
+  if (lifeLayout == L_TICKS) {
+    // arc from 150 to 210 degrees (from the top, clockwise); TFT_eSPI angles start at the bottom
+    uint16_t bg = c ? swap16(fbPix[(by + bh / 2) * W + CX]) : TFT_BLACK;
+    fb.drawArc(CX, CY, 90, 87, 330, 30, c ? c->fill : BTN_FILL, bg, !c);
+    if (batPct > 0) fb.drawArc(CX, CY, 90, 87, (30 - batPct * 60 / 100 + 360) % 360, 30, col, bg, !c);
+    if (shownUsb) drawBolt(CX, 186, TFT_YELLOW);
+  } else {
+    fb.setTextDatum(MC_DATUM);
+    fb.setTextPadding(0);
+    fb.setTextColor(col);
+    String txt = String(batPct) + "%";
+    int ty = by + 8;
+    int tx = shownUsb ? CX + 8 : CX;    // make room for the bolt
+    fb.drawString(txt, tx, ty, 2);
+    if (shownUsb) drawBolt(tx - fb.textWidth(txt, 2) / 2 - 9, ty, TFT_YELLOW);
+  }
+  markDirty(bx, by, bw, bh);
+  redrawMarkerIfIn(bx, by, bw, bh);
+}
+
+void drawBattery() {
+  readBattery();
+  paintBattery();
+}
+
+// after erasing the dot: repaint whatever it may have covered
+void repaintOverlaps(int x, int y, int w, int h) {
+  if (screen != S_LIFE) return;
+  auto hit = [&](int bx, int by, int bw, int bh) {
+    return x < bx + bw && bx < x + w && y < by + bh && by < y + h;
+  };
+  if (hit(CX - LIFE_W / 2, numY() - LIFE_H / 2, LIFE_W, LIFE_H)) paintNumber();
+  if (hit(CX - DELTA_W / 2, deltaY() - DELTA_H / 2, DELTA_W, DELTA_H)) drawDelta();
+  int bx, by, bw, bh;
+  batteryBox(bx, by, bw, bh);
+  if (hit(bx, by, bw, bh)) paintBattery();
+  if (lifeLayout == L_HISTORY && hit(HIST_X, HIST_Y, HIST_W, HIST_H)) paintHistory();
+}
+
+// draws the whole life screen into the framebuffer (no flush)
+void paintLife() {
+  prepLifeBg();
   markerX = markerY = -1;
-  drawRing();
-  drawLife();
+  restoreBg(0, 0, W, H);                // ring / ticks / hints / halo / life bar included
+  paintNumber();
   drawDelta();
   drawBattery();
+  paintHistory();
   drawMarker();
   markDirty(0, 0, W, H);
   lifeDirty = deltaDirty = false;
+}
+
+void fullRedraw() {
+  paintLife();
   flush();
 }
 
 // ================= Menu & dice =================
-const uint16_t BTN_FILL = 0x18E3;       // very dark grey
 
 // normal button border: grey, or the theme color when a mana theme is on
 uint16_t btnBorder() {
@@ -785,45 +1076,48 @@ uint16_t btnBorder() {
 // ---- icons (about 28x28, centered on cx, cy; bg is used for anti-aliasing) ----
 const uint16_t MANA[5] = { 0xFFB9, 0x3CBF, 0xAADB, 0xFA26, 0x3E8B };   // W U B R G
 
-void drawIcon(uint8_t icon, int cx, int cy, uint16_t c, uint16_t bg) {
+// `k` scales the icon (carousel / list); `fade` dims the mana colors like `c` was dimmed
+void drawIcon(uint8_t icon, int cx, int cy, uint16_t c, uint16_t bg, float k = 1, uint8_t fade = 255) {
+  auto S = [k](float v) { return (int)lroundf(v * k); };
   switch (icon) {
     case I_RESET: {                       // circular arrow, clockwise, gap at the top
-      const float r = 11;
-      fb.drawArc(cx, cy, 12, 9, 215, 145, c, bg, true);   // TFT_eSPI angles: 0 = bottom, clockwise
+      const float r = 11 * k;
+      fb.drawArc(cx, cy, S(12), S(9), 215, 145, c, bg, true);   // TFT_eSPI angles: 0 = bottom, clockwise
       float a = 145 * PI / 180;           // arrowhead at the upper-left end, pointing clockwise
       float px = cx - r * sinf(a), py = cy + r * cosf(a);
       float dx = -cosf(a), dy = -sinf(a); // clockwise tangent
       float rx = -sinf(a), ry = cosf(a);  // outward radius
-      fb.fillTriangle(px + dx * 7, py + dy * 7,
-                      px - dx * 2 + rx * 6, py - dy * 2 + ry * 6,
-                      px - dx * 2 - rx * 6, py - dy * 2 - ry * 6, c);
+      fb.fillTriangle(px + dx * 7 * k, py + dy * 7 * k,
+                      px - dx * 2 * k + rx * 6 * k, py - dy * 2 * k + ry * 6 * k,
+                      px - dx * 2 * k - rx * 6 * k, py - dy * 2 * k - ry * 6 * k, c);
       break;
     }
     case I_DICE: {                        // die face showing 5
-      fb.fillSmoothRoundRect(cx - 13, cy - 13, 26, 26, 5, c, bg);
-      fb.fillSmoothRoundRect(cx - 10, cy - 10, 20, 20, 3, bg, c);
-      const int o = 6;
-      fb.fillSmoothCircle(cx, cy, 2, c, bg);
-      fb.fillSmoothCircle(cx - o, cy - o, 2, c, bg); fb.fillSmoothCircle(cx + o, cy - o, 2, c, bg);
-      fb.fillSmoothCircle(cx - o, cy + o, 2, c, bg); fb.fillSmoothCircle(cx + o, cy + o, 2, c, bg);
+      fb.fillSmoothRoundRect(cx - S(13), cy - S(13), S(26), S(26), S(5), c, bg);
+      fb.fillSmoothRoundRect(cx - S(10), cy - S(10), S(20), S(20), S(3), bg, c);
+      const int o = S(6), pr = max(2, S(2));
+      fb.fillSmoothCircle(cx, cy, pr, c, bg);
+      fb.fillSmoothCircle(cx - o, cy - o, pr, c, bg); fb.fillSmoothCircle(cx + o, cy - o, pr, c, bg);
+      fb.fillSmoothCircle(cx - o, cy + o, pr, c, bg); fb.fillSmoothCircle(cx + o, cy + o, pr, c, bg);
       break;
     }
     case I_SUN:
-      fb.fillSmoothCircle(cx, cy, 6, c, bg);
+      fb.fillSmoothCircle(cx, cy, S(6), c, bg);
       for (int i = 0; i < 8; i++) {
         float a = i * PI / 4, ca = cosf(a), sa = sinf(a);
-        fb.drawWideLine(cx + 9 * ca, cy + 9 * sa, cx + 13 * ca, cy + 13 * sa, 2.5f, c, bg);
+        fb.drawWideLine(cx + 9 * k * ca, cy + 9 * k * sa, cx + 13 * k * ca, cy + 13 * k * sa, 2.5f * k, c, bg);
       }
       break;
     case I_PALETTE:                       // the five mana colors in a ring
       for (int i = 0; i < 5; i++) {
         float a = -PI / 2 + i * 2 * PI / 5;
-        fb.fillSmoothCircle(cx + (int)roundf(9 * cosf(a)), cy + (int)roundf(9 * sinf(a)), 4, MANA[i], bg);
+        uint16_t m = fade == 255 ? MANA[i] : fb.alphaBlend(fade, MANA[i], TFT_BLACK);
+        fb.fillSmoothCircle(cx + (int)roundf(9 * k * cosf(a)), cy + (int)roundf(9 * k * sinf(a)), S(4), m, bg);
       }
       break;
     case I_BACK:                          // arrow pointing left
-      fb.drawWideLine(cx - 4, cy, cx + 12, cy, 4, c, bg);
-      fb.fillTriangle(cx - 13, cy, cx - 3, cy - 9, cx - 3, cy + 9, c);
+      fb.drawWideLine(cx - S(4), cy, cx + S(12), cy, 4 * k, c, bg);
+      fb.fillTriangle(cx - S(13), cy, cx - S(3), cy - S(9), cx - S(3), cy + S(9), c);
       break;
     case I_CHECK:
       fb.drawWideLine(cx - 10, cy, cx - 3, cy + 7, 4, c, bg);
@@ -834,9 +1128,9 @@ void drawIcon(uint8_t icon, int cx, int cy, uint16_t c, uint16_t bg) {
       fb.fillSmoothCircle(cx + 5, cy - 4, 8, bg, bg);
       break;
     case I_INF:                           // infinity: two loops
-      for (int k = -1; k <= 1; k += 2) {
-        fb.fillSmoothCircle(cx + k * 7, cy, 7, c, bg);
-        fb.fillSmoothCircle(cx + k * 7, cy, 4, bg, c);
+      for (int s = -1; s <= 1; s += 2) {
+        fb.fillSmoothCircle(cx + s * 7, cy, 7, c, bg);
+        fb.fillSmoothCircle(cx + s * 7, cy, 4, bg, c);
       }
       break;
     case I_LEFT:
@@ -844,6 +1138,22 @@ void drawIcon(uint8_t icon, int cx, int cy, uint16_t c, uint16_t bg) {
       break;
     case I_RIGHT:
       fb.fillTriangle(cx + 9, cy, cx - 7, cy - 11, cx - 7, cy + 11, c);
+      break;
+    case I_BT: {                          // Bluetooth rune
+      float w = 2.5f * k;
+      int a = S(6), b = S(12);
+      fb.drawWideLine(cx - a, cy - a, cx + a, cy + a, w, c, bg);
+      fb.drawWideLine(cx + a, cy + a, cx, cy + b, w, c, bg);
+      fb.drawWideLine(cx, cy + b, cx, cy - b, w, c, bg);
+      fb.drawWideLine(cx, cy - b, cx + a, cy - a, w, c, bg);
+      fb.drawWideLine(cx + a, cy - a, cx - a, cy + a, w, c, bg);
+      break;
+    }
+    case I_LAYOUT:                        // round screen with a 2x2 grid
+      fb.fillSmoothCircle(cx, cy, 12, c, bg);
+      fb.fillSmoothCircle(cx, cy, 10, bg, c);
+      fb.fillRect(cx - 6, cy - 6, 5, 5, c); fb.fillRect(cx + 1, cy - 6, 5, 5, c);
+      fb.fillRect(cx - 6, cy + 1, 5, 5, c); fb.fillRect(cx + 1, cy + 1, 5, 5, c);
       break;
     default: break;
   }
@@ -885,14 +1195,14 @@ const Btn MENU_BTNS[M_COUNT] = {
 // Theme picker: 3x2 built-in swatches, a row with the custom slots (a thumbnail of
 // the background sent from the web page, or "-" when empty) and "Voltar".
 const char *THEME_LABELS[] = { "-", "W", "U", "B", "R", "G" };
-const int THEME_BTN_COUNT = 6 + CT_SLOTS + 1;
+const int THEME_BTN_COUNT = 6 + CT_SLOTS + 3;
 const Btn THEME_BTNS[THEME_BTN_COUNT] = {
   { 28,  34, 56, 44, nullptr }, { 92,  34, 56, 44, nullptr }, { 156,  34, 56, 44, nullptr },
   { 28,  84, 56, 44, nullptr }, { 92,  84, 56, 44, nullptr }, { 156,  84, 56, 44, nullptr },
   { 44, 134, 72, 48, nullptr }, { 124, 134, 72, 48, nullptr },
-  { 80, 190, 80, 32, nullptr, I_BACK },
+  { 53, 188, 42, 30, nullptr, I_BT }, { 99, 188, 42, 30, nullptr, I_LAYOUT }, { 145, 188, 42, 30, nullptr, I_BACK },
 };
-const int THEME_BACK = THEME_BTN_COUNT - 1;
+const int THEME_BT = THEME_BTN_COUNT - 3, THEME_LAYOUT = THEME_BTN_COUNT - 2, THEME_BACK = THEME_BTN_COUNT - 1;
 
 // Font picker: a test number in the candidate font, dots for the position, and
 // < OK > underneath. The font changes live; OK saves. The test number starts at
@@ -918,18 +1228,249 @@ const Btn DICE_BTNS[DICE_COUNT + 1] = {
 void showScreen(Screen s) {
   screen = s;
   wantMarkerX = wantMarkerY = -1;
-  fb.fillSprite(TFT_BLACK);
+  tickWant = -1;
+  if (bgCustom()) restoreBg(0, 0, W, H);
+  else fb.fillSprite(TFT_BLACK);
   markerX = markerY = -1;
 }
 
-void drawMenu() {
-  showScreen(S_MENU);
+// ---- main menu, in 6 layouts ----
+const uint8_t ITEM_ICON[M_COUNT] = { I_RESET, I_NONE, I_NONE, I_NONE, I_DICE, I_SUN, I_PALETTE, I_BACK };
+const char *ITEM_TEXT[M_COUNT] = { nullptr, "Aa", "20", "40", nullptr, nullptr, nullptr, nullptr };
+const char *ITEM_NAME[M_COUNT] = { "Reiniciar", "Fonte", "20 vidas", "40 vidas", "Dado", "Brilho", "Tema", "Voltar" };
+const float SLICE_DEG = 360.0f / 7;     // radial / slices: items 0..6 around, "back" in the center
+// circles 3-3-2, "back" in the middle, reset at the bottom
+const int CELL_X[M_COUNT] = { 150, 60, 60, 180, 120, 180, 90, 120 };
+const int CELL_Y[M_COUNT] = { 180, 60, 120, 120, 60, 60, 180, 120 };
+
+bool isCurrentStart(int i) { return (i == M_20 && startingLife == 20) || (i == M_40 && startingLife == 40); }
+uint16_t itemBorder(int i) {
+  if (i == M_RESET) return TFT_ORANGE;
+  return isCurrentStart(i) ? TFT_GREEN : btnBorder();
+}
+inline uint16_t faded(uint16_t c, uint8_t fade) { return fade == 255 ? c : fb.alphaBlend(fade, c, TFT_BLACK); }
+
+// icon or text of a menu item, centered on (cx, cy)
+void drawItem(int i, int cx, int cy, uint16_t bg, float k = 1, uint8_t fade = 255) {
+  uint16_t c = faded(TFT_WHITE, fade);
+  if (ITEM_ICON[i]) { drawIcon(ITEM_ICON[i], cx, cy, c, bg, k, fade); return; }
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  fb.setTextColor(c);
+  if (k > 1.5f) { fb.setFreeFont(&FreeSansBold18pt7b); fb.drawString(ITEM_TEXT[i], cx, cy); fb.setTextFont(1); }
+  else fb.drawString(ITEM_TEXT[i], cx, cy + 1, k < 1 ? 2 : 4);
+}
+
+// round button; the anti-aliasing blends with the pixel just above it
+void drawCircleItem(int i, int cx, int cy, int r, uint16_t border, uint8_t fade = 255) {
+  int sy = max(0, cy - r - 2);
+  uint16_t under = swap16(fbPix[sy * W + cx]);
+  uint16_t fill = faded(BTN_FILL, fade);
+  fb.fillSmoothCircle(cx, cy, r, faded(border, fade), under);
+  fb.fillSmoothCircle(cx, cy, r - 2, fill, faded(border, fade));
+  drawItem(i, cx, cy, fill, 1, fade);
+}
+
+void slicePos(int i, int r, int &x, int &y) {
+  float a = i * SLICE_DEG * PI / 180;
+  x = CX + (int)lroundf(r * sinf(a));
+  y = CY - (int)lroundf(r * cosf(a));
+}
+
+void paintSlices() {
+  uint16_t ring = ringColor();
+  uint16_t fill = fb.alphaBlend(90, ring, BTN_FILL), edge = fb.alphaBlend(204, ring, BTN_FILL);
+  const float half = SLICE_DEG / 2 - 2;
+  for (int y = 0; y < H; y++)
+    for (int x = 0; x < W; x++) {
+      int dx = x - CX, dy = y - CY, r2 = dx * dx + dy * dy;
+      if (r2 < 52 * 52 || r2 > 116 * 116) continue;
+      float a = angTop(dx, dy);
+      int k = (int)lroundf(a / SLICE_DEG);
+      float off = fabsf(a - k * SLICE_DEG);
+      if (off > half) continue;
+      k %= 7;
+      float r = sqrtf((float)r2);
+      float e = min(min(r - 52, 116 - r), (half - off) * (PI / 180) * r);
+      uint16_t border = (k == M_RESET || isCurrentStart(k)) ? itemBorder(k) : edge;
+      fb.drawPixel(x, y, e < 1.5f ? border : fill);
+    }
+  for (int i = 0; i < 7; i++) { int x, y; slicePos(i, 85, x, y); drawItem(i, x, y, fill); }
+  drawCircleItem(M_BACK, CX, CY, 44, btnBorder());
+}
+
+void paintCarousel() {
+  if (!bgCustom()) drawRing();
+  int prev = (menuCur + M_COUNT - 1) % M_COUNT, next = (menuCur + 1) % M_COUNT;
+  drawCircleItem(prev, 40, 108, 22, itemBorder(prev), 115);
+  drawCircleItem(next, 200, 108, 22, itemBorder(next), 115);
+  fb.fillSmoothCircle(CX, 108, 44, itemBorder(menuCur) == btnBorder() ? accentColor() : itemBorder(menuCur),
+                      swap16(fbPix[60 * W + CX]));
+  fb.fillSmoothCircle(CX, 108, 42, BTN_FILL, accentColor());
+  drawItem(menuCur, CX, 108, BTN_FILL, 1.8f);
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  fb.setTextColor(TFT_WHITE);
+  fb.drawString(ITEM_NAME[menuCur], CX, 172, 4);
   for (int i = 0; i < M_COUNT; i++) {
-    bool current = (i == M_20 && startingLife == 20) || (i == M_40 && startingLife == 40);
-    uint16_t border = (i == M_RESET) ? TFT_ORANGE : (current ? TFT_GREEN : btnBorder());
-    drawButton(MENU_BTNS[i], border);
+    int x = CX + (int)lroundf((i - 3.5f) * 11);
+    if (i == menuCur) fb.fillSmoothCircle(x, 198, 3, accentColor(), TFT_BLACK);
+    else fb.fillSmoothCircle(x, 198, 2, GREY, TFT_BLACK);
+  }
+}
+
+void paintList() {
+  uint16_t under = swap16(fbPix[CY * W + 230]);
+  fb.drawArc(CX, CY, 110, 107, 240, 300, ringColor(), under, !bgCustom());   // right side: "scroll here"
+  for (int o = -2; o <= 2; o++) {
+    int i = (menuCur + o + M_COUNT) % M_COUNT, y = CY + o * 44;
+    uint8_t fade = o == 0 ? 255 : (abs(o) == 1 ? 153 : 64);
+    uint16_t bg = swap16(fbPix[y * W + 40]);
+    if (o == 0) {
+      fb.fillRoundRect(34, y - 21, 172, 42, 12, BTN_FILL);
+      fb.drawRoundRect(34, y - 21, 172, 42, 12, accentColor());
+      bg = BTN_FILL;
+    }
+    drawItem(i, o == 0 ? 62 : 72, y, bg, o == 0 ? 1 : 0.8f, fade);
+    fb.setTextDatum(ML_DATUM);
+    fb.setTextPadding(0);
+    fb.setTextColor(faded(TFT_WHITE, fade));
+    fb.drawString(ITEM_NAME[i], o == 0 ? 88 : 94, y + 1, o == 0 ? 4 : 2);
+    if (isCurrentStart(i)) fb.fillSmoothCircle(o == 0 ? 190 : 182, y, 4, faded(TFT_GREEN, fade), bg);
+  }
+}
+
+// draws the main menu into the framebuffer (no flush)
+void paintMenu() {
+  showScreen(S_MENU);
+  switch (menuLayout) {
+    case ML_GRID:
+      for (int i = 0; i < M_COUNT; i++) drawButton(MENU_BTNS[i], itemBorder(i));
+      break;
+    case ML_RADIAL:
+      fb.drawCircle(CX, CY, 80, BTN_FILL);
+      fb.drawCircle(CX, CY, 79, BTN_FILL);
+      for (int i = 0; i < 7; i++) { int x, y; slicePos(i, 80, x, y); drawCircleItem(i, x, y, 25, itemBorder(i)); }
+      drawCircleItem(M_BACK, CX, CY, 24, btnBorder());
+      break;
+    case ML_SLICES:   paintSlices(); break;
+    case ML_CAROUSEL: paintCarousel(); break;
+    case ML_CIRCLES:
+      for (int i = 0; i < M_COUNT; i++) drawCircleItem(i, CELL_X[i], CELL_Y[i], 25, i == M_BACK ? btnBorder() : itemBorder(i));
+      break;
+    case ML_LIST:     paintList(); break;
   }
   markDirty(0, 0, W, H);
+}
+
+void drawMenu() {
+  paintMenu();
+  flush();
+}
+
+// item under (x, y) for the layouts with fixed buttons, or -1
+int menuHit(int x, int y) {
+  auto near = [&](int cx, int cy, int r) { int dx = x - cx, dy = y - cy; return dx * dx + dy * dy <= r * r; };
+  switch (menuLayout) {
+    case ML_GRID:
+      return buttonAt(MENU_BTNS, M_COUNT, x, y);
+    case ML_RADIAL:
+      if (near(CX, CY, 28)) return M_BACK;
+      for (int i = 0; i < 7; i++) { int px, py; slicePos(i, 80, px, py); if (near(px, py, 29)) return i; }
+      return -1;
+    case ML_SLICES: {
+      int d = distOf(x, y);
+      if (d < 48) return M_BACK;
+      if (d > 125) return -1;
+      return (int)lroundf(angTop(x - CX, y - CY) / SLICE_DEG) % 7;
+    }
+    case ML_CIRCLES:
+      for (int i = 0; i < M_COUNT; i++) if (near(CELL_X[i], CELL_Y[i], 29)) return i;
+      return -1;
+  }
+  return -1;
+}
+
+// ---- layout picker (Menu > Tema > Layout) ----
+// Live thumbnails of the life screen and the menu: tap one to try the next layout.
+// "Fundo" toggles the custom image behind the menu; OK saves.
+const int THUMB_R = 46, THUMB_D = 2 * THUMB_R + 1, THUMB_Y = 98;
+const int THUMB_X[2] = { 66, 174 };
+uint16_t thumbs[2][THUMB_D * THUMB_D];  // byte-swapped, like fbPix
+enum { LY_LIFE, LY_MENU, LY_BG, LY_OK, LY_COUNT };
+const Btn LAYOUT_BTNS[LY_COUNT] = {
+  { 20, 52, 92, 92, nullptr }, { 128, 52, 92, 92, nullptr },
+  { 54, 188, 62, 30, nullptr }, { 124, 188, 62, 30, nullptr, I_CHECK },
+};
+
+// renders the life screen (k = 0) or the menu (k = 1) and shrinks it into thumbs[k]
+void renderThumb(int k) {
+  if (k == 0) { screen = S_LIFE; paintLife(); }
+  else { int keep = menuCur; menuCur = M_BACK; paintMenu(); menuCur = keep; }
+  uint16_t *dst = thumbs[k];
+  for (int ty = 0; ty < THUMB_D; ty++)
+    for (int tx = 0; tx < THUMB_D; tx++) {
+      int sx = tx * W / THUMB_D, sy = ty * H / THUMB_D, r = 0, g = 0, b = 0;
+      for (int yy = sy; yy < sy + 3; yy++)
+        for (int xx = sx; xx < sx + 3; xx++) {
+          uint16_t v = swap16(fbPix[min(yy, H - 1) * W + min(xx, W - 1)]);
+          r += v >> 11; g += (v >> 5) & 0x3F; b += v & 0x1F;
+        }
+      dst[ty * THUMB_D + tx] = swap16((uint16_t)((r / 9) << 11 | (g / 9) << 5 | (b / 9)));
+    }
+  screen = S_LAYOUT;
+}
+
+void paintLayoutPicker() {
+  showScreen(S_LAYOUT);
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  const char *titles[2] = { "Tela", "Menu" };
+  const char *names[2] = { LIFE_LAYOUT_NAMES[lifeLayout], MENU_LAYOUT_NAMES[menuLayout] };
+  const int counts[2] = { LIFE_LAYOUTS, MENU_LAYOUTS }, cur[2] = { lifeLayout, menuLayout };
+  for (int k = 0; k < 2; k++) {
+    int cx = THUMB_X[k];
+    fb.fillSmoothCircle(cx, THUMB_Y, THUMB_R + 2, btnBorder(), TFT_BLACK);
+    for (int y = -THUMB_R; y <= THUMB_R; y++)
+      for (int x = -THUMB_R; x <= THUMB_R; x++)
+        if (x * x + y * y <= THUMB_R * THUMB_R)
+          fbPix[(THUMB_Y + y) * W + cx + x] = thumbs[k][(y + THUMB_R) * THUMB_D + x + THUMB_R];
+    fb.setTextColor(GREY);
+    fb.drawString(titles[k], cx, 38, 2);
+    fb.setTextColor(TFT_WHITE);
+    fb.drawString(names[k], cx, 157, 2);
+    for (int i = 0; i < counts[k]; i++) {
+      int x = cx + (int)lroundf((i - (counts[k] - 1) / 2.0f) * 9);
+      if (i == cur[k]) fb.fillSmoothCircle(x, 174, 3, TFT_WHITE, TFT_BLACK);
+      else fb.fillSmoothCircle(x, 174, 2, GREY, TFT_BLACK);
+    }
+  }
+  Btn bg = LAYOUT_BTNS[LY_BG];
+  bg.label = menuBg ? "Fundo" : "Sem fundo";
+  drawButton(bg, menuBg ? TFT_GREEN : GREY);
+  drawButton(LAYOUT_BTNS[LY_OK], TFT_GREEN);
+  markDirty(0, 0, W, H);
+}
+
+void drawLayoutPicker() {
+  renderThumb(0);
+  renderThumb(1);
+  paintLayoutPicker();
+  flush();
+}
+
+void onLayoutTap(int x, int y) {
+  int i = buttonAt(LAYOUT_BTNS, LY_COUNT, x, y);
+  if (i == LY_LIFE) { lifeLayout = (lifeLayout + 1) % LIFE_LAYOUTS; renderThumb(0); }
+  else if (i == LY_MENU) { menuLayout = (menuLayout + 1) % MENU_LAYOUTS; renderThumb(1); }
+  else if (i == LY_BG) { menuBg = !menuBg; renderThumb(1); }
+  else if (i == LY_OK) {
+    DBG("layout %d menu %d bg %d saved", lifeLayout, menuLayout, menuBg);
+    requestSave();
+    closeMenu();
+    return;
+  } else return;
+  paintLayoutPicker();
   flush();
 }
 
@@ -981,6 +1522,8 @@ void drawThemePicker() {
       fb.drawString(String(k + 1), b.x + b.w / 2, b.y + b.h / 2 + 1, 4);   // empty slot
     }
   }
+  drawButton(THEME_BTNS[THEME_BT], bleAdvertising || bleConnected ? 0x3CBF : btnBorder());
+  drawButton(THEME_BTNS[THEME_LAYOUT], btnBorder());
   drawButton(THEME_BTNS[THEME_BACK], btnBorder());
   markDirty(0, 0, W, H);
   flush();
@@ -1134,6 +1677,7 @@ void screenSleep() {
   DBG("screen off");
   asleep = true;
   wantMarkerX = wantMarkerY = -1;
+  tickWant = -1;
   analogWrite(BACKLIGHT, 0);
   tft.writecommand(0x28);
   tft.writecommand(0x10);
@@ -1152,6 +1696,7 @@ void screenWake() {
 
 void openMenu() {
   DBG("menu open");
+  menuCur = M_BACK;                     // carousel / list start on "back": a stray tap is harmless
   drawMenu();
 }
 
@@ -1165,11 +1710,23 @@ void resetGame(int start) {
   startingLife = start;
   life = start;
   pendingDelta = 0;
+  histCount = 0;
   requestSave();
 }
 
 void onMenuTap(int x, int y) {
-  int item = buttonAt(MENU_BTNS, M_COUNT, x, y);
+  int item;
+  if (menuLayout == ML_CAROUSEL) {      // the big circle runs the item, the neighbors move to it
+    auto near = [&](int cx, int cy, int r) { int dx = x - cx, dy = y - cy; return dx * dx + dy * dy <= r * r; };
+    if (near(CX, 108, 48)) item = menuCur;
+    else if (near(40, 108, 28))  { menuCur = (menuCur + M_COUNT - 1) % M_COUNT; drawMenu(); return; }
+    else if (near(200, 108, 28)) { menuCur = (menuCur + 1) % M_COUNT; drawMenu(); return; }
+    else return;
+  } else if (menuLayout == ML_LIST) {   // the middle row runs the item, the others scroll to it
+    int o = constrain((int)lroundf((y - CY) / 44.0f), -2, 2);
+    if (o != 0) { menuCur = (menuCur + o + M_COUNT) % M_COUNT; drawMenu(); return; }
+    item = menuCur;
+  } else item = menuHit(x, y);
   DBG("menu tap item=%d", item);
   switch (item) {
     case M_RESET: resetGame(startingLife); break;
@@ -1197,6 +1754,8 @@ void onThemeTap(int x, int y) {
   int i = buttonAt(THEME_BTNS, THEME_BTN_COUNT, x, y);
   DBG("theme tap item=%d", i);
   if (i < 0) return;
+  if (i == THEME_LAYOUT) { drawLayoutPicker(); return; }
+  if (i == THEME_BT) { bleOn(); drawBleScreen(); return; }
   if (i >= THEME_COUNT && i < THEME_COUNT + CT_SLOTS && !ctValid[i - THEME_COUNT]) return;  // empty slot
   if (i < THEME_COUNT + CT_SLOTS && i != theme) { theme = i; themeChanged(); requestSave(); }
   closeMenu();
@@ -1210,6 +1769,8 @@ void onScreenTap(int x, int y) {
     case S_BRIGHT:      onBrightnessTap(x, y); break;
     case S_THEME:       onThemeTap(x, y); break;
     case S_FONT:        onFontTap(x, y); break;
+    case S_LAYOUT:      onLayoutTap(x, y); break;
+    case S_BLE:         onBleTap(x, y); break;
     default: break;
   }
 }
@@ -1246,6 +1807,10 @@ void nudge(int d) {
     previewNum = constrain(previewNum + d, -999, 999);
     fontDirty = true;
   }
+  else if (screen == S_MENU) {          // carousel / list: rim scrolls
+    menuCur = (menuCur + (d > 0 ? 1 : M_COUNT - 1)) % M_COUNT;
+    menuDirty = true;
+  }
   else changeLife(d);
 }
 
@@ -1272,6 +1837,8 @@ Zone zoneOf(int x, int y) {
     if (d >= RIM_INNER_R) return Z_RIM;
     return (x >= CX) ? Z_PLUS : Z_MINUS;
   }
+  if (screen == S_MENU && (menuLayout == ML_CAROUSEL || menuLayout == ML_LIST) && d >= RIM_INNER_R)
+    return Z_RIM;                       // a rim touch that doesn't move is still a tap
   if (screen != S_LIFE) return Z_MENU;
   if (d >= RIM_INNER_R) return Z_RIM;
   if (d < CENTER_R)     return Z_CENTER;
@@ -1293,6 +1860,7 @@ void onTouchStart(int x, int y) {
   lastHoldMs = touchStart;
   holdFired = false;
   angleAccum = 0;
+  rimMoved = false;
   zone = zoneOf(x, y);
   lastAngle = angleOf(x, y);
   DBG("touch start x=%d y=%d dist=%d zone=%d", x, y, distOf(x, y), zone);
@@ -1312,11 +1880,15 @@ void onTouchMove(int x, int y) {
   if (INVERT_DIRECTION) d = -d;
   angleAccum += d;
 
-  const float step = (screen == S_BRIGHT) ? BRIGHT_STEP_DEG : STEP_DEGREES;
-  while (angleAccum >= step)  { nudge(+1); angleAccum -= step; }
-  while (angleAccum <= -step) { nudge(-1); angleAccum += step; }
+  const float step = (screen == S_BRIGHT) ? BRIGHT_STEP_DEG : (screen == S_MENU ? MENU_STEP_DEG : STEP_DEGREES);
+  while (angleAccum >= step)  { nudge(+1); angleAccum -= step; rimMoved = true; }
+  while (angleAccum <= -step) { nudge(-1); angleAccum += step; rimMoved = true; }
 
   if (screen != S_LIFE) return;         // the dot is only drawn on the life screen
+  if (lifeLayout == L_TICKS) {          // ticks light up instead of the dot
+    tickWant = fmodf(a + 90 + 360, 360);
+    return;
+  }
 
   // marker dot snapped onto the ring
   float rad = a * PI / 180.0f;
@@ -1339,7 +1911,9 @@ void onTouchEnd() {
   DBG("touch end zone=%d held=%lu life=%d", zone, held, life);
   touching = false;
   wantMarkerX = wantMarkerY = -1;
+  tickWant = -1;
   switch (zone) {
+    case Z_RIM:    if (screen == S_MENU && !rimMoved) onScreenTap(touchX, touchY); break;
     case Z_PLUS:   if (!holdFired) nudge(+1); break;
     case Z_MINUS:  if (!holdFired) nudge(-1); break;
     case Z_CENTER: if (held < MENU_TAP_MAX_MS) openMenu(); break;
@@ -1417,6 +1991,7 @@ void ctInit() {
 
 void onDataWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint16_t len);
 void onCtrlWrite(uint16_t conn, BLECharacteristic *chr, uint8_t *data, uint16_t len) {
+  bleLastMs = millis();
   if (len > 1 && data[0] == 0x06) { onDataWrite(conn, chr, data + 1, len - 1); return; }
   if (cmdLen || len == 0 || len > sizeof(cmdBuf)) return;   // one command at a time
   for (int i = 0; i < len; i++) cmdBuf[i] = data[i];
@@ -1428,6 +2003,7 @@ uint16_t bleConn = 0;                    // handle of the current (only) connect
 volatile uint32_t rxBytes = 0, rxWrites = 0, rxMinLen = 9999, rxMaxLen = 0;   // diag
 #endif
 void onDataWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint16_t len) {
+  bleLastMs = millis();
 #if DEBUG
   rxBytes += len; rxWrites++; if (len < rxMinLen) rxMinLen = len; if (len > rxMaxLen) rxMaxLen = len;
 #endif
@@ -1555,8 +2131,77 @@ void bleTask() {
   }
 }
 
+// ---- Bluetooth on / off ----
+void bleOn() {
+  bleOnMs = millis();
+  if (bleConnected || bleAdvertising) return;
+  Bluefruit.Advertising.setInterval(160, 1600);  // 100 ms for the first 30 s, then 1 s
+  Bluefruit.Advertising.setFastTimeout(30);
+  Bluefruit.Advertising.start(0);
+  bleAdvertising = true;
+  DBG("ble advertising on");
+}
+
+void bleOff() {
+  if (bleAdvertising) Bluefruit.Advertising.stop();
+  bleAdvertising = false;
+  if (bleConnected) Bluefruit.disconnect(bleConn);
+  DBG("ble off");
+}
+
+// timeouts; called every loop
+void bleWatch() {
+  if (bleAdvertising && !bleConnected && millis() - bleOnMs > BLE_ADV_S * 1000UL) {
+    DBG("ble advertising timed out");
+    bleOff();
+    if (screen == S_BLE) closeMenu();
+  }
+  if (bleConnected && upState == UP_IDLE && millis() - bleLastMs > BLE_IDLE_S * 1000UL) {
+    DBG("ble idle, disconnecting");
+    bleLastMs = millis();               // don't ask again every loop while it goes
+    Bluefruit.disconnect(bleConn);
+  }
+  if (bleUiDirty && screen == S_BLE && !asleep) { bleUiDirty = false; drawBleScreen(); }
+}
+
+// Bluetooth screen: status, a hint for the web page and "Desligar" / back
+enum { BT_OFF, BT_BACK, BT_COUNT };
+const Btn BLE_BTNS[BT_COUNT] = {
+  { 52, 168, 84, 36, "Desligar" }, { 144, 168, 44, 36, nullptr, I_BACK },
+};
+
+void drawBleScreen() {
+  showScreen(S_BLE);
+  bool on = bleConnected || bleAdvertising;
+  drawIcon(I_BT, CX, 58, on ? 0x3CBF : GREY, TFT_BLACK, 1.6f);
+  fb.setTextDatum(MC_DATUM);
+  fb.setTextPadding(0);
+  fb.setTextColor(TFT_WHITE);
+  fb.drawString(bleConnected ? "Conectado" : (on ? "Esperando..." : "Desligado"), CX, 104, 4);
+  fb.setTextColor(GREY);
+  if (bleConnected) fb.drawString("Envie o tema pelo site", CX, 136, 2);
+  else if (on) {
+    fb.drawString("No site, toque em Conectar", CX, 130, 2);
+    fb.drawString("e escolha \"MTG Life\"", CX, 148, 2);
+  }
+  drawButton(BLE_BTNS[BT_OFF], on ? TFT_RED : GREY);
+  drawButton(BLE_BTNS[BT_BACK], btnBorder());
+  markDirty(0, 0, W, H);
+  flush();
+}
+
+void onBleTap(int x, int y) {
+  int i = buttonAt(BLE_BTNS, BT_COUNT, x, y);
+  if (i == BT_OFF) { bleOff(); closeMenu(); }
+  else if (i == BT_BACK) closeMenu();   // a connection keeps going; advertising times out by itself
+}
+
 void onBleConnect(uint16_t conn) {
   bleConn = conn;
+  bleConnected = true;
+  bleAdvertising = false;               // the stack stops advertising once connected
+  bleLastMs = millis();
+  bleUiDirty = true;
 #if DEBUG
   rxBytes = rxWrites = rxMaxLen = 0; rxMinLen = 9999;
 #endif
@@ -1565,6 +2210,8 @@ void onBleConnect(uint16_t conn) {
   if (c) c->requestPHY(BLE_GAP_PHY_2MBPS);   // falls back to 1M if the central can't
 }
 void onBleDisconnect(uint16_t conn, uint8_t reason) {
+  bleConnected = false;
+  bleUiDirty = true;
   DBG("ble disconnected, reason 0x%02x; rx %lu bytes in %lu writes (len %lu..%lu)", reason, rxBytes, rxWrites, rxMinLen, rxMaxLen);
   upState = UP_IDLE;
 }
@@ -1593,10 +2240,7 @@ void bleBegin() {
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addService(mtgSvc);
   Bluefruit.ScanResponse.addName();
-  Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.setInterval(160, 1600);  // 100 ms for the first 30 s, then 1 s
-  Bluefruit.Advertising.setFastTimeout(30);
-  Bluefruit.Advertising.start(0);
+  Bluefruit.Advertising.restartOnDisconnect(false);   // off until "Conectar" on the device
 }
 
 void setup() {
@@ -1702,6 +2346,22 @@ void serialCommands() {
       batOverride = constrain(v, -1, 100);
       lastBatteryMs = millis() - 31000; // re-read (and apply) on this loop
     }
+    else if (sscanf(line, "theme %d", &v) == 1 && v >= 0 && v < THEME_COUNT + CT_SLOTS) { theme = v; themeChanged(); closeMenu(); }
+    else if (sscanf(line, "layout %d", &v) == 1) { lifeLayout = v / 10 % LIFE_LAYOUTS; menuLayout = v % 10 % MENU_LAYOUTS; closeMenu(); }
+    else if (sscanf(line, "menubg %d", &v) == 1) { menuBg = v; closeMenu(); }
+    else if (sscanf(line, "cur %d", &v) == 1) { menuCur = v % M_COUNT; drawMenu(); }
+    else if (strcmp(line, "picker") == 0) drawLayoutPicker();
+    else if (strcmp(line, "bt") == 0) { bleOn(); drawBleScreen(); }
+    else if (strcmp(line, "themes") == 0) drawThemePicker();
+    else if (strcmp(line, "shot") == 0) {   // raw framebuffer dump (RGB565, byte-swapped) after "SHOT\n"
+      delay(300);
+      Serial.write("SHOT\n");
+      const uint8_t *q = (const uint8_t *)fbPix;
+      size_t left = W * H * 2;
+      while (left) { size_t k = Serial.write(q, left > 512 ? 512 : left); q += k; left -= k; if (!k) delay(1); }
+      Serial.flush();
+      continue;
+    }
     else if (strcmp(line, "menu") == 0) openMenu();
     else if (strcmp(line, "home") == 0) closeMenu();
     else { DBG("cmd? '%s'", line); continue; }
@@ -1731,9 +2391,11 @@ void loop() {
   }
   checkHold();
   bleTask();
+  bleWatch();
 
   // clear the "+3" indicator 2 s after the last change
   if (pendingDelta != 0 && millis() - lastChangeMs > 2000) {
+    pushHistory(pendingDelta);
     pendingDelta = 0;
     deltaDirty = true;
   }
@@ -1751,6 +2413,7 @@ void loop() {
   // doesn't blank them mid-choice
   int sleepS = lowBattery ? LOW_BAT_SLEEP_S : SLEEP_SECS[sleepIdx];
   if (sleepS > 0 && screen != S_LIFE) sleepS = max(sleepS, MENU_MIN_SLEEP_S);
+  if (screen == S_BLE && (bleAdvertising || bleConnected)) lastActivityMs = millis();
   if (!asleep && !touching && sleepS > 0 &&
       millis() - lastActivityMs > (unsigned long)sleepS * 1000UL) {
     screenSleep();
@@ -1761,12 +2424,16 @@ void loop() {
 
   // one frame: draw what changed into the framebuffer, then push the dirty rect
   static unsigned long lastFrame = 0;
-  if (!asleep && (screen == S_LIFE || screen == S_BRIGHT || screen == S_FONT) &&
+  if (!asleep && (screen == S_LIFE || screen == S_BRIGHT || screen == S_FONT || screen == S_MENU) &&
       millis() - lastFrame >= FRAME_MS) {
     lastFrame = millis();
     if (screen == S_LIFE) {
       if (lifeDirty)  { lifeDirty = false;  drawLife(); }
       if (deltaDirty) { deltaDirty = false; drawDelta(); }
+      if (lifeLayout == L_TICKS) drawTicks();
+    } else if (screen == S_MENU && menuDirty) {
+      menuDirty = false;
+      paintMenu();
     } else if (screen == S_BRIGHT && brightDirty) {
       brightDirty = false;
       drawBrightnessValue();

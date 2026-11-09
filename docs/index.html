@@ -91,6 +91,8 @@
       <div class="status"><span class="dot" id="dot"></span><span id="connText">Desconectado</span></div>
       <button class="primary" id="connect">Conectar</button>
     </div>
+    <p class="muted" style="margin:10px 0 0">Antes, ligue o Bluetooth no aparelho: <b>Menu → Tema → ícone do Bluetooth</b>.
+      Ele desliga sozinho depois de 3 min sem conexão ou 2 min parado.</p>
     <div class="warn" id="noBle" hidden></div>
   </section>
 
@@ -143,14 +145,17 @@
   <section class="card" id="firmware">
     <h2>Firmware</h2>
     <div class="row" style="justify-content:space-between">
-      <div><b>v0.1.0</b> <span class="muted">· 9 nov 2026 · XIAO nRF52840 + Round Display</span></div>
-      <a class="btn primary" href="firmware/mtg-life-counter-v0.1.0.uf2" download>Baixar .uf2</a>
+      <div><b>v0.2.0</b> <span class="muted">· 9 nov 2026 · XIAO nRF52840 + Round Display</span></div>
+      <a class="btn primary" href="firmware/mtg-life-counter-v0.2.0.uf2" download>Baixar .uf2</a>
     </div>
     <ol class="steps">
       <li>Ligue o XIAO no computador pelo USB-C.</li>
       <li>Dê dois cliques rápidos no botão de reset. Aparece o drive <b>XIAO-SENSE</b> (ou XIAO-BOOT).</li>
       <li>Arraste o arquivo <b>.uf2</b> para o drive. A placa grava e reinicia sozinha.</li>
     </ol>
+    <p class="muted">Novo na v0.2.0: 6 layouts da tela de vida e 6 do menu, fundo do tema atrás do menu e
+      Bluetooth desligado até você ligar no aparelho.
+      <a href="firmware/mtg-life-counter-v0.1.0.uf2" download>v0.1.0</a> ainda disponível.</p>
     <p class="muted">Atualizar não apaga a vida salva, as configurações nem os temas enviados.
       Código e instruções em <a href="https://github.com/joaopedropio/xiaord-life-counter">github.com/joaopedropio/xiaord-life-counter</a>.</p>
   </section>

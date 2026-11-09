@@ -135,13 +135,43 @@ arduino-cli upload  -b Seeeduino:nrf52:xiaonRF52840 -p /dev/ttyACM0 mtg_life_cou
 - **Salvamento:** vida, fonte, tema, modo, brilho e tempo de apagar são salvos na flash 3 s após a última mudança (com o
   dedo fora da tela) e restaurados no boot.
 
+## Layouts (tela de vida A–F e menu 1–6)
+- Vindos dos mockups `tools/mockups/layouts.html`. Escolha em **Menu → Tema → ícone de layout**:
+  duas miniaturas reais (a tela é desenhada no framebuffer e reduzida para 93×93); tocar numa
+  miniatura passa para o próximo layout, "Fundo"/"Sem fundo" liga a imagem do tema personalizado
+  atrás do menu principal (só o menu principal; dado, brilho, tema e fonte continuam pretos), ✓ salva.
+- Salvo no byte que era "reservado" do registro de estado: `vida | menu << 4 | 0x80 = sem fundo`;
+  0xFF (registros antigos) = padrões (A, 1, com fundo).
+- Tela de vida: A Atual, B Anel de vida (anel = vida ÷ vida inicial, na cor do número), C Marcas
+  (24 tracinhos que acendem perto do dedo, sem bolinha; bateria vira arco), D Dicas (− e + fracos,
+  anel aberto embaixo com a bateria), E Recentes (número mais alto e as 3 últimas mudanças, cada
+  uma entra 2 s depois do último toque; zera ao reiniciar), F Halo (brilho na cor do tema, anel fino).
+- O anel/marcas/dicas/halo/barra fazem parte do **fundo**: `restoreBg()` calcula cada pixel por
+  layout (`lifeBgPixel`), então apagar o número ou a bolinha não corta o anel. `repaintRim()`
+  redesenha só o pedaço do anel que mudou (barra de vida, marcas). Depois de apagar a bolinha,
+  `repaintOverlaps()` redesenha número / "+3" / bateria / histórico que ela cobria.
+- Com tema personalizado o anel desenhado na imagem continua aparecendo (B, C e D desenham por cima).
+- Menu: 1 Grade, 2 Radial, 3 Fatias, 4 Carrossel, 5 Redondos, 6 Lista. Carrossel e lista giram pela
+  borda (30° por item) e abrem em "Voltar" (um toque sem querer não reinicia a partida); no
+  carrossel o círculo grande executa e os vizinhos passam para eles; na lista a linha do meio
+  executa e as outras rolam até ela. Toque na borda sem girar conta como toque.
+- Comandos de teste (com `DEBUG`): `layout LM` (ex.: `layout 23` = C + menu 4), `menubg 0|1`,
+  `cur N` (item do carrossel/lista), `picker`, `themes`, `theme N`, `shot` (copia o framebuffer pela
+  serial; usado para os prints do README).
+- Flash: 657 KB com `DEBUG 0` (~30 KB antes de 0xCF000). RAM: +34 KB das miniaturas.
+
 ## Temas pelo site (BLE)
 - **Site:** `docs/index.html` + `docs/themes.js` (editor + Web Bluetooth). Publicado copiando os
   dois arquivos para `~/joaopedropio.github.io/mtg-life/` → https://joaopedropio.github.io/mtg-life/
   (os outros projetos do site seguem o mesmo padrão). Chrome/Edge no Android e computador;
   no iPhone só pelo app **Bluefy** (o Safari não tem Web Bluetooth).
-- **BLE sempre ligado** (Bluefruit / SoftDevice S140), nome "MTG Life", +4 dBm, anúncio a 100 ms
-  nos primeiros 30 s e depois 1 s. Serviço `4d544700-6c69-6665-2d63-6f756e746572`: CTRL
+- **BLE desligado até pedir** (Bluefruit / SoftDevice S140 sempre iniciado, mas sem anunciar): Menu →
+  Tema → ícone do Bluetooth abre a tela "Esperando..." e começa a anunciar como "MTG Life", +4 dBm,
+  100 ms nos primeiros 30 s e depois 1 s. Para de anunciar após 3 min sem conexão (`BLE_ADV_S`) ou
+  no "Desligar"; conexão sem tráfego por 2 min é derrubada (`BLE_IDLE_S`); ao desconectar não
+  volta a anunciar (`restartOnDisconnect(false)`). A tela do Bluetooth não apaga sozinha enquanto
+  espera / está conectada; "voltar" mantém a conexão. Comando de teste: `bt`.
+  (Até a v0.1.0 o BLE ficava sempre anunciando.) Serviço `4d544700-6c69-6665-2d63-6f756e746572`: CTRL
   (`...4701`, write+notify) e DATA (`...4702`, write without response). Protocolo no
   comentário "BLE: themes from the web page" no sketch. **Protocolo v2:** o INFO traz o MTU
   atual no byte 7, e os dados também podem vir pelo CTRL como `06 + bytes` (CTRL aceita até
@@ -302,6 +332,8 @@ git clone https://github.com/Seeed-Studio/Seeed_Arduino_FS ~/Documents/Arduino/l
 - **v0.1.0 (2026-11-09):** primeira versão de produção. `DEBUG 0` (sem log serial, comandos de
   teste, espera pelo monitor nem contadores de diagnóstico do BLE); `FW_VERSION` no topo do sketch.
   636.824 bytes (78%).
+- **v0.2.0 (2026-11-09):** layouts da tela de vida (A–F) e do menu (1–6), fundo do tema atrás do
+  menu, Bluetooth desligado até ligar no aparelho. 659.292 bytes (81%).
 - O `DEBUG` no repositório fica em **0**. Para desenvolver, mudar para 1 localmente (os comandos de
   teste pela serial e o `tools/flash.sh --log` dependem dele) e voltar para 0 antes de commitar.
 - Gerar uma versão: subir `FW_VERSION`, compilar com `--output-dir build` (pasta ignorada pelo git),
